@@ -237,7 +237,7 @@ DIVERGING = ["#E76F51", "#F4A261", "#E9C46A", "#8ECBC2", "#2A9D8F", "#0B2545"]
 
 def reporting_month_options() -> list[str]:
     """Month labels ('mmm-yy') spanning Jul-25 → Dec-27 inclusive."""
-    months = pd.period_range("2025-07", "2027-12", freq="M")
+    months = pd.period_range("2025-07-01", "2027-12-31", freq="M")
     return [m.strftime("%b-%y") for m in months]
 
 

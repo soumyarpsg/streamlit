@@ -358,6 +358,15 @@ def process_data(raw: pd.DataFrame) -> pd.DataFrame:
     for c in df.select_dtypes(include="object").columns:
         df[c] = df[c].astype(str).str.strip()
 
+    # Exclude rows where mobile_number is NULL, 0, or the literal string "NULL"/"nan"
+    mob = pd.to_numeric(df["mobile_number"].replace({"NULL": None, "null": None, "nan": None, "None": None, "": None}), errors="coerce")
+    df = df[mob.notna() & (mob > 0)].copy()
+
+    # Replace any remaining literal "NULL"/"nan" strings across all object columns with NaN
+    null_strings = {"NULL", "null", "Null", "nan", "NaN", "None", "none", ""}
+    for c in df.select_dtypes(include="object").columns:
+        df[c] = df[c].where(~df[c].isin(null_strings), other=pd.NA)
+
     # Parse dates robustly
     for c in DATE_COLS + ["msr_month"]:
         if c in df.columns:
@@ -1148,43 +1157,26 @@ def render_table(metrics_df: pd.DataFrame):
         return
 
     display = metrics_df.copy()
-    # Format numeric columns
+
+    # Format Conversion % for display only
+    if "Conversion %" in display.columns:
+        display["Conversion %"] = display["Conversion %"].apply(
+            lambda v: f"{v:.2f}%" if pd.notna(v) else "0.00%"
+        )
+
+    # Format integer columns with comma separators
     int_cols = [
         "Total Customers", "MTD MSR Registration", "MSR Members",
         "Non MSR Members", "Sum of NOB >2K", "Sum of NOB <2K",
         "Unique Customers (Single Bill >2K)",
     ]
-    styler = display.style.format(
-        {c: "{:,}" for c in int_cols if c in display.columns}
-        | {"Conversion %": "{:.2f}%"}
-    )
+    for c in int_cols:
+        if c in display.columns:
+            display[c] = display[c].apply(
+                lambda v: f"{int(v):,}" if pd.notna(v) else "0"
+            )
 
-    # Colour-highlight Conversion % using pure CSS (no matplotlib needed)
-    def _conv_color(val):
-        try:
-            v = float(str(val).replace("%", ""))
-        except (ValueError, TypeError):
-            return ""
-        if v >= 70:
-            bg, fg = "#2A9D8F", "#ffffff"
-        elif v >= 40:
-            bg, fg = "#E9C46A", "#1a2332"
-        elif v >= 20:
-            bg, fg = "#F4A261", "#1a2332"
-        else:
-            bg, fg = "#E76F51", "#ffffff"
-        return f"background-color: {bg}; color: {fg}; font-weight: 600;"
-
-    if "Conversion %" in display.columns:
-        styler = styler.applymap(_conv_color, subset=["Conversion %"])
-
-    styler = styler.set_properties(**{"text-align": "center", "font-size": "13px"})
-    styler = styler.set_table_styles([
-        {"selector": "th",
-         "props": [("background-color", "#0B2545"), ("color", "white"),
-                   ("font-weight", "600"), ("text-align", "center")]}
-    ])
-    st.dataframe(styler, use_container_width=True, height=500)
+    st.dataframe(display, use_container_width=True, height=500)
 
 
 # ---------------------------------------------------------------------------

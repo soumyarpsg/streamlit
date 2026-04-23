@@ -232,6 +232,47 @@ DIVERGING = ["#E76F51", "#F4A261", "#E9C46A", "#8ECBC2", "#2A9D8F", "#0B2545"]
 
 
 # ---------------------------------------------------------------------------
+# Helpers (reporting month list, conversion-% colour scale)
+# ---------------------------------------------------------------------------
+
+def reporting_month_options() -> list[str]:
+    """Month labels ('mmm-yy') spanning Jul-25 → Dec-27 inclusive."""
+    months = pd.period_range("2025-07", "2027-12", freq="M")
+    return [m.strftime("%b-%y") for m in months]
+
+
+def _default_reporting_month() -> str:
+    """Pick a sensible default that exists in the allowed range."""
+    opts = reporting_month_options()
+    now = pd.Timestamp.now().strftime("%b-%y")
+    return now if now in opts else opts[0]
+
+
+def _conversion_color(val) -> str:
+    """Pure-CSS red → amber → green gradient for the 'Conversion %' column.
+
+    Replaces pandas' Styler.background_gradient so we don't need matplotlib.
+    """
+    try:
+        x = float(str(val).replace("%", ""))
+    except (ValueError, TypeError):
+        return ""
+    t = max(0.0, min(1.0, x / 100.0))
+    if t < 0.5:                                  # red → amber
+        tt = t * 2
+        r = int(231 + (244 - 231) * tt)
+        g = int(111 + (196 - 111) * tt)
+        b = int(81  + (105 - 81)  * tt)
+    else:                                        # amber → green
+        tt = (t - 0.5) * 2
+        r = int(244 + (42  - 244) * tt)
+        g = int(196 + (157 - 196) * tt)
+        b = int(105 + (143 - 105) * tt)
+    return (f"background-color: rgba({r},{g},{b},0.35); "
+            f"color: #0B2545; font-weight: 600;")
+
+
+# ---------------------------------------------------------------------------
 # Session state initialisation
 # ---------------------------------------------------------------------------
 
@@ -241,6 +282,7 @@ def _init_state() -> None:
         "data_loaded": False,
         "data_source": None,
         "page": "landing",
+        "reporting_month": _default_reporting_month(),
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -342,7 +384,15 @@ def load_cloud_sql(dialect: str, host: str, port: int, database: str,
 
 @st.cache_data(show_spinner=False)
 def process_data(raw: pd.DataFrame) -> pd.DataFrame:
-    """Clean, normalise and enrich the raw dataframe."""
+    """Clean, normalise and enrich the raw dataframe.
+
+    Cleaning rules:
+      * Column names lower-cased + underscored
+      * Any string "NULL" / "null" / "None" / "NaN" / "" → real NaN
+      * Drop rows where NOC Tagging = 'Untagged'
+      * Drop rows where essential fields (mobile_number, store_code) are NaN
+      * Exclude rows where grs_sales is NaN or < 0
+    """
     df = raw.copy()
     df.columns = [str(c).strip().lower().replace(" ", "_") for c in df.columns]
 
@@ -354,19 +404,45 @@ def process_data(raw: pd.DataFrame) -> pd.DataFrame:
             f"Available: {list(df.columns)}"
         )
 
-    # Trim strings
+    # Coerce string "NULL"-like values to real NaN across object columns
+    null_tokens = {"null", "none", "nan", "n/a", "na", ""}
     for c in df.select_dtypes(include="object").columns:
-        df[c] = df[c].astype(str).str.strip()
+        s = df[c].astype(str).str.strip()
+        df[c] = s.where(~s.str.lower().isin(null_tokens), other=np.nan)
 
     # Parse dates robustly
     for c in DATE_COLS + ["msr_month"]:
         if c in df.columns:
             df[c] = pd.to_datetime(df[c], errors="coerce")
 
-    # Drop Untagged NOC rows
+    # Track counts for user-facing messages
+    stats = {"initial": len(df)}
+
+    # Drop Untagged NOC rows (only when tagging is explicitly 'Untagged')
+    noc_l = df["noc_tagging"].astype(str).str.strip().str.lower()
     before = len(df)
-    df = df[df["noc_tagging"].str.lower() != "untagged"].copy()
-    df.attrs["dropped_untagged"] = before - len(df)
+    df = df[noc_l != "untagged"].copy()
+    stats["dropped_untagged"] = before - len(df)
+
+    # Drop rows missing essential identifiers
+    before = len(df)
+    df = df.dropna(subset=["mobile_number", "store_code"]).copy()
+    stats["dropped_missing_ids"] = before - len(df)
+
+    # Numeric coercions (do this BEFORE the negative-sales filter)
+    for c in ["grs_sales", "nob_ach", "billed_qty", "bill_no"]:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    # Drop rows with invalid gross sales (NaN or negative — returns / bad data)
+    before = len(df)
+    df = df[df["grs_sales"].notna() & (df["grs_sales"] >= 0)].copy()
+    stats["dropped_bad_sales"] = before - len(df)
+
+    # Zero-fill the remaining numeric NaNs on non-critical cols
+    for c in ["nob_ach", "billed_qty", "bill_no"]:
+        if c in df.columns:
+            df[c] = df[c].fillna(0)
 
     # Resolve shopping date
     if "calendar_day" in df.columns and df["calendar_day"].notna().any():
@@ -380,24 +456,29 @@ def process_data(raw: pd.DataFrame) -> pd.DataFrame:
     df["shopping_month"] = df["shopping_date"].dt.strftime("%b-%y")
     df["shopping_period"] = df["shopping_date"].dt.to_period("M")
 
+    # Reporting month taken from month_name column (the "for which month is
+    # this data" field). Fall back to shopping date if month_name is absent.
+    if "month_name" in df.columns and df["month_name"].notna().any():
+        df["reporting_month"] = df["month_name"].dt.strftime("%b-%y")
+        df["reporting_period"] = df["month_name"].dt.to_period("M")
+    else:
+        df["reporting_month"] = df["shopping_month"]
+        df["reporting_period"] = df["shopping_period"]
+
     # Enrollment month (from msr_month)
     df["enroll_month"] = df["msr_month"].dt.strftime("%b-%y")
     df["enroll_period"] = df["msr_month"].dt.to_period("M")
 
-    # MSR flag: treat rows as MSR members if the tag says so or there's a valid
-    # msr_number that is not the same as the mobile placeholder.
-    tag = df.get("msr_tagging", pd.Series(index=df.index, dtype=str)).astype(str).str.upper()
-    df["is_msr"] = tag.str.contains("MSR_MEMBER") | tag.eq("MSR")
-    # Fall back: non-null, non-zero msr_number also counts as enrolled
-    if "msr_number" in df.columns:
-        msr_valid = pd.to_numeric(df["msr_number"], errors="coerce").fillna(0) > 0
-        df["is_msr"] = df["is_msr"] | msr_valid
+    # MSR flag: explicit tag OR a valid enrollment (msr_number + msr_month).
+    # A null msr_month disqualifies the row as an "enrolled" member.
+    tag = df["msr_tagging"].astype(str).str.upper()
+    tag_says_msr = tag.str.contains("MSR_MEMBER", na=False) | tag.eq("MSR")
+    msr_num = pd.to_numeric(df["msr_number"], errors="coerce")
+    num_says_msr = msr_num.fillna(0) > 0
+    df["is_msr"] = (tag_says_msr | num_says_msr) & df["msr_month"].notna()
 
-    # Numeric coercions
-    for c in ["grs_sales", "nob_ach", "billed_qty", "bill_no"]:
-        if c in df.columns:
-            df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
-
+    df.attrs["stats"] = stats
+    df.attrs["dropped_untagged"] = stats["dropped_untagged"]  # back-compat
     return df
 
 
@@ -449,7 +530,22 @@ def apply_filters(df: pd.DataFrame, filters: dict) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 def _current_month_period(df: pd.DataFrame) -> Optional[pd.Period]:
-    """Choose the 'current month' as the latest shopping period in the data."""
+    """Return the pd.Period used as 'current month' for MTD MSR Registration.
+
+    Priority:
+      1. The reporting_month stored in st.session_state (set on landing page).
+      2. The latest shopping_period present in the filtered data.
+    """
+    rm = None
+    try:
+        rm = st.session_state.get("reporting_month")
+    except Exception:
+        rm = None
+    if rm:
+        try:
+            return pd.Period(pd.to_datetime(rm, format="%b-%y"), freq="M")
+        except Exception:
+            pass
     if "shopping_period" not in df.columns:
         return None
     per = df["shopping_period"].dropna()
@@ -679,7 +775,39 @@ def render_section(title: str, icon: str = "📊"):
 # ---------------------------------------------------------------------------
 
 def landing_page():
-    render_hero("Connect a data source to begin")
+    render_hero("Select a reporting month, then connect a data source")
+
+    # --- Reporting Month selector (required before upload) ---------------
+    st.markdown(
+        '<div class="section-title"><span class="dot"></span>📅 '
+        "Reporting Month</div>",
+        unsafe_allow_html=True,
+    )
+    rm_cols = st.columns([2, 5])
+    with rm_cols[0]:
+        opts = reporting_month_options()
+        current = st.session_state.get("reporting_month") or _default_reporting_month()
+        if current not in opts:
+            current = opts[0]
+        choice = st.selectbox(
+            "Reporting Month",
+            options=opts,
+            index=opts.index(current),
+            help=("Matches the `month_name` column in your data. "
+                  "Only transactions for this month will be analysed."),
+            label_visibility="collapsed",
+        )
+        st.session_state.reporting_month = choice
+    with rm_cols[1]:
+        st.markdown(
+            f'<div style="padding:0.55rem 0.9rem;background:#f1f5fb;'
+            f'border-left:4px solid #1C6DD0;border-radius:6px;'
+            f'color:#0B2545;font-size:0.92rem;">'
+            f'Analysing <b>{choice}</b>. The dashboard will filter the '
+            f'<code>month_name</code> column to this reporting period.'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
 
     st.write("")
     cols = st.columns(3, gap="large")
@@ -799,11 +927,16 @@ def landing_page():
 # ---------------------------------------------------------------------------
 
 def _sample_data(n: int = 4000) -> pd.DataFrame:
-    """Synthetic but realistic dataset mirroring the user's schema."""
+    """Synthetic but realistic dataset mirroring the user's schema.
+
+    Spans Oct-25 → Sep-26 so it overlaps the reporting-month selector range,
+    and sprinkles in a few NULLs and negative sales to exercise the cleaning
+    pipeline.
+    """
     rng = np.random.default_rng(42)
     stores = [
-        ("S070", "Gariahat",      "East",  "Kolkata", "Sagar SenGupta"),
-        ("S071", "Park Street",   "East",  "Kolkata", "Sagar SenGupta"),
+        ("S070", "Gariahat",      "East",  "Kolkata",  "Sagar SenGupta"),
+        ("S071", "Park Street",   "East",  "Kolkata",  "Sagar SenGupta"),
         ("S120", "Koramangala",   "South", "Bengaluru", "Anitha Rao"),
         ("S121", "Indiranagar",   "South", "Bengaluru", "Anitha Rao"),
         ("S210", "Bandra West",   "West",  "Mumbai",    "Rahul Mehta"),
@@ -811,17 +944,28 @@ def _sample_data(n: int = 4000) -> pd.DataFrame:
         ("S310", "CP Delhi",      "North", "Delhi",     "Preeti Arora"),
         ("S311", "Gurgaon Cyber", "North", "Delhi",     "Preeti Arora"),
     ]
+    start = pd.Timestamp("2025-10-01")
     rows = []
     for _ in range(n):
         s = stores[rng.integers(0, len(stores))]
-        sold = pd.Timestamp("2026-01-01") + pd.Timedelta(days=int(rng.integers(0, 120)))
+        sold = start + pd.Timedelta(days=int(rng.integers(0, 360)))
         mob = int(7000000000 + rng.integers(0, 99999999))
         is_msr = rng.random() < 0.55
         msr_num = mob if is_msr else 0
-        # 80% of MSR members have enrolled in the same month as a purchase
-        enroll_offset = rng.integers(-5, 1) if is_msr else 0
-        enroll = sold - pd.Timedelta(days=int(abs(enroll_offset) * 30)) if is_msr else pd.NaT
-        sales = int(rng.integers(150, 6000))
+        # Enrolment always earlier-or-equal to shopping date for MSR members
+        enroll_offset_days = int(rng.integers(0, 180)) if is_msr else 0
+        enroll = (sold - pd.Timedelta(days=enroll_offset_days)) if is_msr else pd.NaT
+        # 1% negative sales (returns) + 1% string-NULL gross sales → both filtered
+        roll = rng.random()
+        if roll < 0.01:
+            sales = -int(rng.integers(100, 1500))
+        elif roll < 0.02:
+            sales = "NULL"
+        else:
+            sales = int(rng.integers(150, 6000))
+        # msr_month sometimes arrives as the string 'NULL' — should be cleaned
+        if is_msr and rng.random() < 0.02:
+            enroll = "NULL"
         rows.append({
             "calendar_day":  sold,
             "store_code":    s[0],
@@ -834,7 +978,7 @@ def _sample_data(n: int = 4000) -> pd.DataFrame:
             "billed_qty":    int(rng.integers(1, 8)),
             "grs_sales":     sales,
             "bill_type":     "Non_Liq" if rng.random() < 0.85 else "Liq",
-            "bill_slab":     ">_2K" if sales > 2000 else "<_2K",
+            "bill_slab":     ">_2K" if isinstance(sales, int) and sales > 2000 else "<_2K",
             "msr_number":    msr_num,
             "msr_month":     enroll,
             "noc_tagging":   "Tagged" if rng.random() < 0.9 else "Untagged",
@@ -1154,11 +1298,9 @@ def render_table(metrics_df: pd.DataFrame):
         {c: "{:,}" for c in int_cols if c in display.columns}
         | {"Conversion %": "{:.2f}%"}
     )
-    # Colour highlight conversion
+    # Colour highlight conversion (pure-CSS gradient — no matplotlib needed)
     if "Conversion %" in display.columns:
-        styler = styler.background_gradient(
-            subset=["Conversion %"], cmap="RdYlGn", vmin=0, vmax=100,
-        )
+        styler = styler.map(_conversion_color, subset=["Conversion %"])
     if "Total Customers" in display.columns:
         styler = styler.bar(
             subset=["Total Customers"], color="#DCE7F5", align="left",
@@ -1185,7 +1327,7 @@ def dashboard_page():
         return
 
     try:
-        df = process_data(raw)
+        df_full = process_data(raw)
     except Exception as e:
         st.error(f"Data processing failed: {e}")
         if st.button("← Back to data source"):
@@ -1195,13 +1337,66 @@ def dashboard_page():
 
     render_hero("Store-level customer & MSR performance")
 
-    if df.attrs.get("dropped_untagged", 0):
-        st.caption(
-            f"ℹ️ Removed {df.attrs['dropped_untagged']:,} rows tagged as "
-            "'Untagged' in NOC Tagging."
+    # --- Reporting-month banner + switcher ------------------------------
+    rm_opts = reporting_month_options()
+    rm_current = st.session_state.get("reporting_month") or _default_reporting_month()
+    if rm_current not in rm_opts:
+        rm_current = rm_opts[0]
+    bc1, bc2 = st.columns([3, 1])
+    with bc1:
+        st.markdown(
+            f'<div style="padding:0.55rem 0.9rem;background:#f1f5fb;'
+            f'border-left:4px solid #1C6DD0;border-radius:6px;color:#0B2545;'
+            f'font-size:0.92rem;margin-bottom:0.5rem;">'
+            f'📅 Reporting Month: <b>{rm_current}</b> · data filtered on '
+            f'<code>month_name</code>.</div>',
+            unsafe_allow_html=True,
         )
+    with bc2:
+        new_rm = st.selectbox(
+            "Change reporting month",
+            options=rm_opts,
+            index=rm_opts.index(rm_current),
+            label_visibility="collapsed",
+        )
+        if new_rm != rm_current:
+            st.session_state.reporting_month = new_rm
+            st.rerun()
 
-    # Build filter UI first (needs the full df for options)
+    # --- Data-cleaning summary -----------------------------------------
+    stats = df_full.attrs.get("stats", {})
+    removed = [
+        (stats.get("dropped_untagged", 0),   "NOC = Untagged"),
+        (stats.get("dropped_missing_ids", 0), "missing identifiers"),
+        (stats.get("dropped_bad_sales", 0),   "null/negative gross sales"),
+    ]
+    msgs = [f"{n:,} {lbl}" for n, lbl in removed if n > 0]
+    if msgs:
+        st.caption("ℹ️ Cleaned: " + " · ".join(msgs) + ".")
+
+    # --- Pre-filter to the selected reporting month --------------------
+    try:
+        rm_period = pd.Period(pd.to_datetime(rm_current, format="%b-%y"), freq="M")
+    except Exception:
+        rm_period = None
+
+    if rm_period is not None and "reporting_period" in df_full.columns:
+        df = df_full[df_full["reporting_period"] == rm_period].copy()
+    else:
+        df = df_full
+
+    if df.empty:
+        st.markdown(
+            '<div class="empty-state"><div class="big">📭</div>'
+            f"<div>No rows found in <b>month_name = {rm_current}</b>.<br>"
+            "Try a different reporting month.</div></div>",
+            unsafe_allow_html=True,
+        )
+        # Still render the sidebar so the user can swap month/source
+        render_sidebar(df_full, pd.DataFrame())
+        return
+
+    # Build filter UI (needs the reporting-month-scoped df for options)
     metrics_all = calculate_metrics(df)
     filters = render_sidebar(df, metrics_all)
 
@@ -1231,7 +1426,8 @@ def dashboard_page():
     st.caption(
         f"Showing **{len(metrics):,}** stores · "
         f"**{len(filtered):,}** filtered transactions · "
-        f"**{filtered['mobile_number'].nunique():,}** unique customers."
+        f"**{filtered['mobile_number'].nunique():,}** unique customers "
+        f"in **{rm_current}**."
     )
     render_table(metrics)
 

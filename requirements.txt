@@ -1,6 +1,13 @@
-streamlit>=1.35.0
-pandas>=2.0.0
-plotly>=5.18.0
-numpy>=1.24.0
-anthropic>=0.28.0
-openpyxl>=3.1.0
+streamlit>=1.32
+pandas>=2.0
+numpy>=1.24
+plotly>=5.18
+openpyxl>=3.1
+xlsxwriter>=3.1
+sqlalchemy>=2.0
+reportlab>=4.0
+# For MS SQL Server (local):
+pyodbc>=5.0
+# For AWS Cloud SQL — install only the driver you need:
+# psycopg2-binary>=2.9      # PostgreSQL (RDS)
+# pymysql>=1.1              # MySQL (RDS)

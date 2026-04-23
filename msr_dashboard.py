@@ -359,15 +359,9 @@ def process_data(raw: pd.DataFrame) -> pd.DataFrame:
         df[c] = df[c].astype(str).str.strip()
 
     # Parse dates robustly
-    # calendar_day is DD-MM-YYYY format (dayfirst)
-    if "calendar_day" in df.columns:
-        df["calendar_day"] = pd.to_datetime(
-            df["calendar_day"], dayfirst=True, errors="coerce"
-        )
-    # month_name and msr_month are %b-%y format (e.g. "Apr-26", "Nov-25")
-    for c in ["month_name", "msr_month"]:
+    for c in DATE_COLS + ["msr_month"]:
         if c in df.columns:
-            df[c] = pd.to_datetime(df[c], format="%b-%y", errors="coerce")
+            df[c] = pd.to_datetime(df[c], errors="coerce")
 
     # Drop Untagged NOC rows
     before = len(df)
@@ -473,6 +467,10 @@ def calculate_metrics(df: pd.DataFrame) -> pd.DataFrame:
     group_cols = ["store_code", "store_name", "asm_name"]
     group_cols = [c for c in group_cols if c in df.columns]
     cur_month = _current_month_period(df)
+
+    # Exclude NULL and 0 mobile numbers from all customer counts
+    valid_mob = pd.to_numeric(df["mobile_number"], errors="coerce")
+    df = df[valid_mob.notna() & (valid_mob > 0)].copy()
 
     # 1. Total unique customers per store
     total_cust = df.groupby(group_cols)["mobile_number"].nunique().rename("Total Customers")
@@ -1160,15 +1158,26 @@ def render_table(metrics_df: pd.DataFrame):
         {c: "{:,}" for c in int_cols if c in display.columns}
         | {"Conversion %": "{:.2f}%"}
     )
-    # Colour highlight conversion
+
+    # Colour-highlight Conversion % using pure CSS (no matplotlib needed)
+    def _conv_color(val):
+        try:
+            v = float(str(val).replace("%", ""))
+        except (ValueError, TypeError):
+            return ""
+        if v >= 70:
+            bg, fg = "#2A9D8F", "#ffffff"
+        elif v >= 40:
+            bg, fg = "#E9C46A", "#1a2332"
+        elif v >= 20:
+            bg, fg = "#F4A261", "#1a2332"
+        else:
+            bg, fg = "#E76F51", "#ffffff"
+        return f"background-color: {bg}; color: {fg}; font-weight: 600;"
+
     if "Conversion %" in display.columns:
-        styler = styler.background_gradient(
-            subset=["Conversion %"], cmap="RdYlGn", vmin=0, vmax=100,
-        )
-    if "Total Customers" in display.columns:
-        styler = styler.bar(
-            subset=["Total Customers"], color="#DCE7F5", align="left",
-        )
+        styler = styler.applymap(_conv_color, subset=["Conversion %"])
+
     styler = styler.set_properties(**{"text-align": "center", "font-size": "13px"})
     styler = styler.set_table_styles([
         {"selector": "th",

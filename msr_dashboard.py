@@ -4,6 +4,9 @@ MySpencers Rewards (MSR) Dashboard — Dark Edition
 Features:
   - Dark mode only (high-contrast, clearly-visible labels)
   - Multi-file upload & consolidation
+  - **Persistent SQLite storage** — every uploaded CSV is auto-appended to a
+    local `msr_data.db` table. All KPIs, charts and drill-downs ALWAYS run on
+    the full accumulated dataset (today's upload + every previous day).
   - AWS RDS live connection (MySQL / PostgreSQL)
   - Date normalisation (dd-mm-yyyy) on ingestion
   - Enrollment logic:
@@ -20,8 +23,11 @@ Run:
 
 from __future__ import annotations
 
+import hashlib
 import io
+import sqlite3
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
@@ -391,6 +397,246 @@ REQUIRED_COLS = [
 DATE_COLS = ["calendar_day","month_name"]
 
 # ────────────────────────────────────────────────────────────────────────────
+# 💾 Persistent storage (SQLite)
+# ────────────────────────────────────────────────────────────────────────────
+# Every uploaded CSV is appended into `msr_transactions` inside msr_data.db.
+# All downstream analysis (KPIs, charts, drill-down) reads from this table, so
+# a daily upload simply grows the dataset automatically.
+# ────────────────────────────────────────────────────────────────────────────
+DB_PATH         = Path("msr_data.db")
+DATA_TABLE      = "msr_transactions"
+UPLOAD_LOG_TBL  = "upload_log"
+# Composite key used to detect duplicate rows across uploads.
+# (These four together uniquely identify a transaction line in practice.)
+DEDUP_KEYS      = ["bill_no", "mobile_number", "calendar_day", "store_code"]
+
+
+def _db_connect() -> sqlite3.Connection:
+    """Open a SQLite connection (creates file on first call)."""
+    conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
+    # Improve concurrency & speed a bit
+    conn.execute("PRAGMA journal_mode = WAL;")
+    conn.execute("PRAGMA synchronous  = NORMAL;")
+    return conn
+
+
+def init_storage() -> None:
+    """Create the upload_log table if missing. Data table is created lazily
+    on first append (so its schema matches whatever the user's CSV contains)."""
+    with _db_connect() as conn:
+        conn.execute(f"""
+            CREATE TABLE IF NOT EXISTS {UPLOAD_LOG_TBL} (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                filename         TEXT,
+                file_hash        TEXT,
+                upload_timestamp TEXT,
+                rows_in_file     INTEGER,
+                rows_appended    INTEGER,
+                rows_duplicate   INTEGER
+            )
+        """)
+        conn.commit()
+
+
+def _file_hash(file_bytes: bytes) -> str:
+    """MD5 of the raw file bytes — lets us detect an identical re-upload."""
+    return hashlib.md5(file_bytes).hexdigest()
+
+
+def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
+    cur = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name=?;",
+        (table,),
+    )
+    return cur.fetchone() is not None
+
+
+def _normalise_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Lowercase, strip, underscore — so schema stays consistent across uploads."""
+    out = df.copy()
+    out.columns = [str(c).strip().lower().replace(" ", "_") for c in out.columns]
+    return out
+
+
+def append_upload_to_db(df: pd.DataFrame, filename: str,
+                        file_bytes: bytes) -> dict:
+    """Append a freshly-uploaded DataFrame into the persistent table.
+
+    Behaviour:
+      • Column names are normalised (lower/strip/underscore) first.
+      • Rows whose (bill_no, mobile_number, calendar_day, store_code) already
+        exist in the table are skipped — so re-uploading the same file is safe.
+      • Adds `_source_file` and `_upload_ts` tracking columns.
+      • Returns a summary dict: {rows_in_file, rows_appended, rows_duplicate}.
+    """
+    if df is None or df.empty:
+        return {"rows_in_file": 0, "rows_appended": 0, "rows_duplicate": 0}
+
+    df = _normalise_columns(df)
+
+    # Add tracking columns
+    df["_source_file"] = filename
+    df["_upload_ts"]   = datetime.now().isoformat(timespec="seconds")
+
+    rows_in_file = len(df)
+    rows_duplicate = 0
+
+    with _db_connect() as conn:
+        # If the data table already exists, filter out rows whose dedup keys
+        # are already present — this is the "safe re-upload" behaviour.
+        if _table_exists(conn, DATA_TABLE):
+            existing_cols = [r[1] for r in conn.execute(
+                f"PRAGMA table_info({DATA_TABLE});"
+            ).fetchall()]
+            usable_keys = [k for k in DEDUP_KEYS
+                           if k in df.columns and k in existing_cols]
+            if usable_keys:
+                # Build an in-memory set of existing composite keys
+                existing = pd.read_sql(
+                    f"SELECT {', '.join(usable_keys)} FROM {DATA_TABLE}",
+                    conn,
+                )
+                if not existing.empty:
+                    exist_tuples = set(map(tuple, existing.astype(str).values))
+                    cand_tuples  = list(map(tuple, df[usable_keys].astype(str).values))
+                    dup_mask = pd.Series(
+                        [t in exist_tuples for t in cand_tuples],
+                        index=df.index,
+                    )
+                    rows_duplicate = int(dup_mask.sum())
+                    df = df.loc[~dup_mask].copy()
+
+            # Align columns with existing table (add missing cols as NULL,
+            # ignore extra cols in the upload that aren't in the table).
+            for c in existing_cols:
+                if c not in df.columns:
+                    df[c] = None
+            df = df[[c for c in existing_cols if c in df.columns]]
+
+        rows_appended = len(df)
+        if rows_appended > 0:
+            df.to_sql(DATA_TABLE, conn, if_exists="append", index=False)
+
+        # Log the upload
+        conn.execute(f"""
+            INSERT INTO {UPLOAD_LOG_TBL}
+                (filename, file_hash, upload_timestamp,
+                 rows_in_file, rows_appended, rows_duplicate)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (
+            filename,
+            _file_hash(file_bytes) if file_bytes else None,
+            datetime.now().isoformat(timespec="seconds"),
+            rows_in_file,
+            rows_appended,
+            rows_duplicate,
+        ))
+        conn.commit()
+
+    return {
+        "rows_in_file"  : rows_in_file,
+        "rows_appended" : rows_appended,
+        "rows_duplicate": rows_duplicate,
+    }
+
+
+def load_all_stored_data() -> pd.DataFrame:
+    """Return the entire accumulated dataset. Empty DF if nothing stored yet."""
+    if not DB_PATH.exists():
+        return pd.DataFrame()
+    with _db_connect() as conn:
+        if not _table_exists(conn, DATA_TABLE):
+            return pd.DataFrame()
+        return pd.read_sql(f"SELECT * FROM {DATA_TABLE}", conn)
+
+
+def get_storage_summary() -> dict:
+    """Quick stats for the UI banner."""
+    summary = {
+        "exists"     : False,
+        "rows"       : 0,
+        "uploads"    : 0,
+        "files"      : [],
+        "min_date"   : None,
+        "max_date"   : None,
+        "db_size_kb" : 0,
+    }
+    if not DB_PATH.exists():
+        return summary
+    summary["db_size_kb"] = round(DB_PATH.stat().st_size / 1024, 1)
+    with _db_connect() as conn:
+        if not _table_exists(conn, DATA_TABLE):
+            return summary
+        summary["exists"] = True
+        summary["rows"] = int(conn.execute(
+            f"SELECT COUNT(*) FROM {DATA_TABLE}"
+        ).fetchone()[0])
+        if _table_exists(conn, UPLOAD_LOG_TBL):
+            summary["uploads"] = int(conn.execute(
+                f"SELECT COUNT(*) FROM {UPLOAD_LOG_TBL}"
+            ).fetchone()[0])
+            summary["files"] = [r[0] for r in conn.execute(
+                f"SELECT DISTINCT filename FROM {UPLOAD_LOG_TBL} "
+                f"ORDER BY id DESC LIMIT 20"
+            ).fetchall()]
+        # Try to pull min/max calendar_day if present
+        try:
+            row = conn.execute(
+                f"SELECT MIN(calendar_day), MAX(calendar_day) FROM {DATA_TABLE}"
+            ).fetchone()
+            summary["min_date"], summary["max_date"] = row
+        except Exception:
+            pass
+    return summary
+
+
+def get_upload_log() -> pd.DataFrame:
+    """Return the upload history as a DataFrame (newest first)."""
+    if not DB_PATH.exists():
+        return pd.DataFrame()
+    with _db_connect() as conn:
+        if not _table_exists(conn, UPLOAD_LOG_TBL):
+            return pd.DataFrame()
+        return pd.read_sql(
+            f"SELECT id, filename, upload_timestamp, rows_in_file, "
+            f"rows_appended, rows_duplicate, file_hash "
+            f"FROM {UPLOAD_LOG_TBL} ORDER BY id DESC",
+            conn,
+        )
+
+
+def clear_storage() -> None:
+    """Drop the data table and wipe the upload log."""
+    if not DB_PATH.exists():
+        return
+    with _db_connect() as conn:
+        conn.execute(f"DROP TABLE IF EXISTS {DATA_TABLE}")
+        conn.execute(f"DELETE FROM {UPLOAD_LOG_TBL}")
+        conn.commit()
+
+
+def deduplicate_storage() -> int:
+    """Remove duplicate rows using the DEDUP_KEYS. Returns rows removed."""
+    df = load_all_stored_data()
+    if df.empty:
+        return 0
+    keys = [k for k in DEDUP_KEYS if k in df.columns]
+    if not keys:
+        return 0
+    before = len(df)
+    df = df.drop_duplicates(subset=keys, keep="first")
+    removed = before - len(df)
+    if removed > 0:
+        with _db_connect() as conn:
+            df.to_sql(DATA_TABLE, conn, if_exists="replace", index=False)
+            conn.commit()
+    return removed
+
+
+# Initialise the DB on import so tables exist before first use
+init_storage()
+
+# ────────────────────────────────────────────────────────────────────────────
 # Session state
 # ────────────────────────────────────────────────────────────────────────────
 def _init_state():
@@ -402,10 +648,35 @@ def _init_state():
         "uploaded_files_info": [],
         "rds_connected": False,
         "rds_config": {},
+        "_auto_loaded_from_storage": False,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
+
+    # ── Auto-load persistent storage on first app run ──────────────────
+    # If there's already data in msr_data.db, load it silently so the user
+    # opens directly onto the dashboard instead of the empty landing page.
+    if (not st.session_state._auto_loaded_from_storage
+            and not st.session_state.data_loaded):
+        try:
+            _sum = get_storage_summary()
+            if _sum["exists"] and _sum["rows"] > 0:
+                _full = load_all_stored_data()
+                _analyse = _full.drop(
+                    columns=[c for c in ["_source_file", "_upload_ts"]
+                             if c in _full.columns],
+                    errors="ignore",
+                )
+                st.session_state.raw_df              = _analyse
+                st.session_state.data_loaded         = True
+                st.session_state.data_source         = "Persistent Storage"
+                st.session_state.uploaded_files_info = [f"DB ({_sum['rows']:,} rows)"]
+                st.session_state.page                = "dashboard"
+        except Exception:
+            # If something goes wrong, just fall back to the landing page
+            pass
+        st.session_state._auto_loaded_from_storage = True
 _init_state()
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -1012,20 +1283,61 @@ def landing_page():
     render_hero("Connect a data source to begin")
     st.write("")
 
-    tab_upload, tab_rds, tab_sample = st.tabs([
+    tab_upload, tab_rds, tab_sample, tab_storage = st.tabs([
         "📁 Upload Files",
         "🗄️ AWS RDS (Live DB)",
         "🧪 Sample Data",
+        "💾 Manage Storage",
     ])
 
     # ── File Upload ────────────────────────────────────────────────────────
     with tab_upload:
+        # Live summary of what's already in persistent storage
+        summary = get_storage_summary()
+
+        if summary["exists"] and summary["rows"] > 0:
+            date_range = ""
+            if summary["min_date"] and summary["max_date"]:
+                date_range = (f"<br>📅 Date range in storage: "
+                              f"<b>{summary['min_date']}</b> → "
+                              f"<b>{summary['max_date']}</b>")
+            st.markdown(f"""
+            <div style="background:linear-gradient(135deg,#13315C 0%,#1C4B82 55%,#0B2545 100%);
+                        border:1px solid rgba(255,255,255,.12);
+                        border-radius:14px;padding:1.1rem 1.3rem;margin-bottom:1rem;
+                        color:#fff;">
+                <div style="font-size:.95rem;font-weight:700;color:#f5c646;margin-bottom:.3rem;">
+                    💾 Persistent Storage Active
+                </div>
+                <div style="font-size:.88rem;color:#d9e3f2;line-height:1.6;">
+                    <b>{summary['rows']:,}</b> rows already stored ·
+                    <b>{summary['uploads']}</b> upload(s) in history ·
+                    DB size: <b>{summary['db_size_kb']} KB</b>
+                    {date_range}
+                    <br>Any new file you upload will be <b>automatically appended</b>.
+                    Duplicate rows (same bill + mobile + date + store) are skipped.
+                </div>
+            </div>""", unsafe_allow_html=True)
+        else:
+            st.markdown("""
+            <div style="background:var(--bg-card);border:1px solid var(--border);
+                        border-radius:14px;padding:1.1rem 1.3rem;margin-bottom:1rem;">
+                <div style="font-size:.95rem;font-weight:700;color:#f5c646;margin-bottom:.3rem;">
+                    💾 Persistent Storage · Empty
+                </div>
+                <div style="font-size:.88rem;color:#a6b4c8;">
+                    No data stored yet. Your first upload will create the table and
+                    seed it. Future uploads will append automatically.
+                </div>
+            </div>""", unsafe_allow_html=True)
+
         st.markdown("""
         <div style="background:var(--bg-card);border:1px solid var(--border);
                     border-radius:14px;padding:1.4rem;margin-bottom:1rem;">
             <h3 style="color:#f5c646;margin:0 0 .5rem 0;">📁 Upload CSV / Excel</h3>
             <p style="color:#a6b4c8;margin:0;font-size:.9rem;">
-                Upload one or <b>multiple files</b> — they will be consolidated automatically.
+                Upload one or <b>multiple files</b> — they are appended to persistent
+                storage and the dashboard re-runs on the <b>full accumulated dataset</b>.
                 <br>Supported: <code>.csv</code>, <code>.xlsx</code>, <code>.xls</code>, <code>.xlsm</code>
             </p>
         </div>""", unsafe_allow_html=True)
@@ -1040,24 +1352,87 @@ def landing_page():
         if uploaded:
             st.success(f"**{len(uploaded)} file(s)** selected: {', '.join(f.name for f in uploaded)}")
 
-        if st.button("🚀 Load & Analyse", use_container_width=True,
-                     disabled=not uploaded, key="btn_load_files"):
-            dfs, info = [], []
+        col_a, col_b = st.columns([2, 1])
+        with col_a:
+            append_btn = st.button(
+                "🚀 Append & Analyse (full history)",
+                use_container_width=True,
+                disabled=not uploaded,
+                key="btn_load_files",
+                help="New rows are appended to msr_data.db, then the dashboard "
+                     "loads the FULL accumulated dataset for analysis.",
+            )
+        with col_b:
+            use_stored_btn = st.button(
+                "📂 Use Stored Data Only",
+                use_container_width=True,
+                disabled=not (summary["exists"] and summary["rows"] > 0),
+                key="btn_use_stored",
+                help="Skip uploading — just load everything already in storage.",
+            )
+
+        if append_btn and uploaded:
+            total_in = total_appended = total_dupe = 0
+            info = []
             for f in uploaded:
                 try:
-                    with st.spinner(f"Parsing {f.name}…"):
-                        raw = load_single(f.getvalue(), f.name)
-                    dfs.append(raw); info.append(f.name)
+                    file_bytes = f.getvalue()
+                    with st.spinner(f"Parsing & appending {f.name}…"):
+                        raw = load_single(file_bytes, f.name)
+                        result = append_upload_to_db(raw, f.name, file_bytes)
+                    total_in       += result["rows_in_file"]
+                    total_appended += result["rows_appended"]
+                    total_dupe     += result["rows_duplicate"]
+                    info.append(f.name)
+                    st.info(
+                        f"📄 **{f.name}** → {result['rows_in_file']:,} rows read · "
+                        f"**{result['rows_appended']:,} appended** · "
+                        f"{result['rows_duplicate']:,} duplicates skipped"
+                    )
                 except Exception as e:
                     st.error(f"Could not load {f.name}: {e}")
-            if dfs:
-                consolidated = pd.concat(dfs, ignore_index=True)
-                st.session_state.raw_df = consolidated
-                st.session_state.data_loaded = True
-                st.session_state.data_source = f"Upload · {len(dfs)} file(s)"
+
+            # Load the FULL accumulated dataset (old + newly appended)
+            full_df = load_all_stored_data()
+            if full_df.empty:
+                st.error("Storage is empty after append — something went wrong.")
+            else:
+                # Drop internal tracking columns before handing to the analyser
+                analyse_df = full_df.drop(
+                    columns=[c for c in ["_source_file", "_upload_ts"]
+                             if c in full_df.columns],
+                    errors="ignore",
+                )
+                st.session_state.raw_df              = analyse_df
+                st.session_state.data_loaded         = True
+                st.session_state.data_source         = f"Storage · {len(info)} new file(s)"
                 st.session_state.uploaded_files_info = info
-                st.session_state.page = "dashboard"
-                st.success(f"Consolidated {len(dfs)} file(s) → {len(consolidated):,} rows")
+                st.session_state.page                = "dashboard"
+                # Cached results are now stale — invalidate
+                st.cache_data.clear()
+                st.success(
+                    f"✅ Appended {total_appended:,} new rows "
+                    f"({total_dupe:,} duplicates skipped). "
+                    f"Dashboard will analyse **{len(analyse_df):,} total rows** from storage."
+                )
+                st.rerun()
+
+        if use_stored_btn:
+            full_df = load_all_stored_data()
+            if full_df.empty:
+                st.error("Storage is empty.")
+            else:
+                analyse_df = full_df.drop(
+                    columns=[c for c in ["_source_file", "_upload_ts"]
+                             if c in full_df.columns],
+                    errors="ignore",
+                )
+                st.session_state.raw_df              = analyse_df
+                st.session_state.data_loaded         = True
+                st.session_state.data_source         = "Persistent Storage"
+                st.session_state.uploaded_files_info = [f"DB ({summary['rows']:,} rows)"]
+                st.session_state.page                = "dashboard"
+                st.cache_data.clear()
                 st.rerun()
 
     # ── AWS RDS ────────────────────────────────────────────────────────────
@@ -1177,6 +1552,138 @@ def landing_page():
             st.session_state.page = "dashboard"
             st.rerun()
 
+    # ── Manage Storage ─────────────────────────────────────────────────────
+    with tab_storage:
+        st.markdown("""
+        <div style="background:var(--bg-card);border:1px solid var(--border);
+                    border-radius:14px;padding:1.4rem;margin-bottom:1rem;">
+            <h3 style="color:#f5c646;margin:0 0 .5rem 0;">💾 Persistent Data Storage</h3>
+            <p style="color:#a6b4c8;margin:0;font-size:.9rem;">
+                All uploads are stored locally in <code>msr_data.db</code> (SQLite).
+                Review what's in there, inspect the upload log, deduplicate, or
+                reset the table.
+            </p>
+        </div>""", unsafe_allow_html=True)
+
+        summary = get_storage_summary()
+
+        # ── Summary cards ──────────────────────────────────────────────
+        s1, s2, s3, s4 = st.columns(4, gap="medium")
+        with s1: kpi("Total Rows Stored",
+                     f"{summary['rows']:,}",
+                     "Across all uploads", "blue")
+        with s2: kpi("Uploads Recorded",
+                     f"{summary['uploads']:,}",
+                     "Files ingested to date", "gold")
+        with s3: kpi("Earliest Date",
+                     str(summary["min_date"] or "—"),
+                     "calendar_day MIN", "green")
+        with s4: kpi("Latest Date",
+                     str(summary["max_date"] or "—"),
+                     "calendar_day MAX", "red")
+
+        st.markdown("")
+
+        # ── Upload history ─────────────────────────────────────────────
+        section("Upload History", "📜")
+        log_df = get_upload_log()
+        if log_df.empty:
+            st.info("No uploads yet. Head to **📁 Upload Files** to get started.")
+        else:
+            # Hide the md5 column from display but keep it in the raw table
+            display_log = log_df.drop(columns=["file_hash"], errors="ignore").rename(columns={
+                "id"              : "#",
+                "filename"        : "File",
+                "upload_timestamp": "Uploaded At",
+                "rows_in_file"    : "Rows Read",
+                "rows_appended"   : "Rows Appended",
+                "rows_duplicate"  : "Duplicates Skipped",
+            })
+            st.dataframe(display_log, use_container_width=True, height=320)
+            ts = datetime.now().strftime("%Y%m%d_%H%M")
+            st.download_button(
+                "⬇️ Download Upload Log (CSV)",
+                to_csv_bytes(display_log),
+                f"upload_log_{ts}.csv", "text/csv",
+            )
+
+        st.markdown("---")
+
+        # ── Actions ────────────────────────────────────────────────────
+        section("Actions", "🛠️")
+        a1, a2, a3 = st.columns(3, gap="medium")
+
+        with a1:
+            if st.button("📂 Load Full Storage into Dashboard",
+                         use_container_width=True,
+                         disabled=not (summary["exists"] and summary["rows"] > 0),
+                         key="btn_storage_load"):
+                full_df = load_all_stored_data()
+                analyse_df = full_df.drop(
+                    columns=[c for c in ["_source_file", "_upload_ts"]
+                             if c in full_df.columns],
+                    errors="ignore",
+                )
+                st.session_state.raw_df              = analyse_df
+                st.session_state.data_loaded         = True
+                st.session_state.data_source         = "Persistent Storage"
+                st.session_state.uploaded_files_info = [f"DB ({len(analyse_df):,} rows)"]
+                st.session_state.page                = "dashboard"
+                st.cache_data.clear()
+                st.rerun()
+
+        with a2:
+            if st.button("🧹 Deduplicate Stored Data",
+                         use_container_width=True,
+                         disabled=not (summary["exists"] and summary["rows"] > 0),
+                         key="btn_storage_dedup",
+                         help="Removes rows with the same bill_no + mobile_number + "
+                              "calendar_day + store_code combination."):
+                removed = deduplicate_storage()
+                st.cache_data.clear()
+                if removed > 0:
+                    st.success(f"Removed {removed:,} duplicate rows.")
+                else:
+                    st.info("No duplicates found.")
+                st.rerun()
+
+        with a3:
+            # Two-click confirmation for the destructive action
+            if "confirm_clear" not in st.session_state:
+                st.session_state.confirm_clear = False
+            if not st.session_state.confirm_clear:
+                if st.button("🗑️ Clear All Stored Data",
+                             use_container_width=True,
+                             disabled=not summary["exists"],
+                             key="btn_storage_clear_1"):
+                    st.session_state.confirm_clear = True
+                    st.rerun()
+            else:
+                st.warning("This will delete **everything** in msr_data.db. "
+                           "Confirm to proceed.")
+                cc1, cc2 = st.columns(2)
+                with cc1:
+                    if st.button("✅ Yes, delete", use_container_width=True,
+                                 key="btn_storage_clear_confirm"):
+                        clear_storage()
+                        st.session_state.raw_df      = None
+                        st.session_state.data_loaded = False
+                        st.session_state.confirm_clear = False
+                        st.cache_data.clear()
+                        st.success("Storage cleared.")
+                        st.rerun()
+                with cc2:
+                    if st.button("❌ Cancel", use_container_width=True,
+                                 key="btn_storage_clear_cancel"):
+                        st.session_state.confirm_clear = False
+                        st.rerun()
+
+        # ── Preview ────────────────────────────────────────────────────
+        if summary["exists"] and summary["rows"] > 0:
+            with st.expander("👀 Preview first 100 rows in storage", expanded=False):
+                preview = load_all_stored_data().head(100)
+                st.dataframe(preview, use_container_width=True, height=420)
+
 # ────────────────────────────────────────────────────────────────────────────
 # Sample data
 # ────────────────────────────────────────────────────────────────────────────
@@ -1240,6 +1747,22 @@ def render_sidebar(df: pd.DataFrame, metrics_df: pd.DataFrame, dd_df: pd.DataFra
 
     if st.session_state.uploaded_files_info:
         st.sidebar.caption("📦 Loaded: " + " | ".join(st.session_state.uploaded_files_info))
+
+    # Persistent-storage status
+    _sum = get_storage_summary()
+    if _sum["exists"] and _sum["rows"] > 0:
+        st.sidebar.markdown(
+            f"""<div style="background:var(--bg-card);border:1px solid var(--border);
+                            border-radius:8px;padding:.6rem .75rem;margin:.4rem 0;
+                            font-size:.78rem;color:#a6b4c8;">
+                 💾 <b style="color:#f5c646;">Storage:</b>
+                 {_sum['rows']:,} rows · {_sum['uploads']} upload(s)
+                 <br><span style="color:#7689a3;">
+                 {_sum['min_date'] or '—'} → {_sum['max_date'] or '—'}
+                 </span>
+               </div>""",
+            unsafe_allow_html=True,
+        )
 
     st.sidebar.markdown("---")
     st.sidebar.markdown("### 🔎 Search")

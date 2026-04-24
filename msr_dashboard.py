@@ -3,21 +3,26 @@ MySpencers Rewards (MSR) Dashboard — Dark Edition
 ==================================================
 Features:
   - Dark mode only (high-contrast, clearly-visible labels)
-  - Multi-file upload & consolidation
+  - Public viewer mode — anyone with the Streamlit URL can see the insights
+  - **Admin authentication** (see auth.py) — only signed-in admins can
+    upload new CSVs and manage the data table
+  - Multi-file upload & consolidation (admin only)
   - **Persistent SQLite storage** — every uploaded CSV is auto-appended to a
     local `msr_data.db` table. All KPIs, charts and drill-downs ALWAYS run on
     the full accumulated dataset (today's upload + every previous day).
-  - AWS RDS live connection (MySQL / PostgreSQL)
   - Date normalisation (dd-mm-yyyy) on ingestion
+  - **Indian Standard Time (IST)** clock shown in the header; Last-Day
+    metrics use IST to decide what "today" means.
   - Enrollment logic:
        * MTD Enrollment  = MSR customers whose calendar_day's mmm-yy == msr_month's mmm-yy
        * Previous Enroll = MSR customers whose calendar_day > msr_month (already members)
+       * Last Day        = most recent calendar_day ≤ today (IST)
   - Conversion %  = unique MSR members enrolled this month / total unique customer base
   - Bills >2K / ≤2K = count of NON-MSR bills only (MSR member bills excluded)
-  - Export CSV / Excel
+  - Export CSV / Excel / PDF
 
 Run:
-    pip install streamlit pandas plotly openpyxl xlsxwriter sqlalchemy pymysql psycopg2-binary
+    pip install streamlit pandas plotly openpyxl xlsxwriter reportlab
     streamlit run msr_dashboard.py
 """
 
@@ -26,7 +31,7 @@ from __future__ import annotations
 import hashlib
 import io
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -35,6 +40,24 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
+
+import auth  # ← separate admin authentication module (auth.py)
+
+# ────────────────────────────────────────────────────────────────────────────
+# Indian Standard Time helpers
+# ────────────────────────────────────────────────────────────────────────────
+IST = timezone(timedelta(hours=5, minutes=30))
+
+
+def now_ist() -> datetime:
+    """Current wall-clock time in India Standard Time."""
+    return datetime.now(IST)
+
+
+def today_ist() -> pd.Timestamp:
+    """Today's date (IST), as a naive pandas Timestamp at midnight."""
+    n = now_ist()
+    return pd.Timestamp(year=n.year, month=n.month, day=n.day)
 
 # ────────────────────────────────────────────────────────────────────────────
 # Page config
@@ -646,8 +669,6 @@ def _init_state():
         "data_source": None,
         "page": "landing",
         "uploaded_files_info": [],
-        "rds_connected": False,
-        "rds_config": {},
         "_auto_loaded_from_storage": False,
     }
     for k, v in defaults.items():
@@ -747,34 +768,6 @@ def load_single(file_bytes: bytes, filename: str) -> pd.DataFrame:
             continue
     buf.seek(0)
     return pd.read_csv(buf, low_memory=False)
-
-# ────────────────────────────────────────────────────────────────────────────
-# AWS RDS connector
-# ────────────────────────────────────────────────────────────────────────────
-def load_from_rds(engine_type: str, host: str, port: int, database: str,
-                  user: str, password: str, query: str) -> pd.DataFrame:
-    """Load data from an AWS RDS (MySQL / PostgreSQL) instance."""
-    from urllib.parse import quote_plus
-    try:
-        from sqlalchemy import create_engine, text
-    except ImportError as e:
-        raise RuntimeError(
-            "SQLAlchemy is required for RDS connections. "
-            "Install: pip install sqlalchemy pymysql psycopg2-binary"
-        ) from e
-
-    pw = quote_plus(password or "")
-    if engine_type.lower() in ("mysql", "mariadb", "aurora-mysql"):
-        url = f"mysql+pymysql://{user}:{pw}@{host}:{port}/{database}"
-    elif engine_type.lower() in ("postgresql", "postgres", "aurora-postgres"):
-        url = f"postgresql+psycopg2://{user}:{pw}@{host}:{port}/{database}"
-    else:
-        raise ValueError(f"Unsupported engine: {engine_type}")
-
-    engine = create_engine(url, pool_pre_ping=True, connect_args={"connect_timeout": 10})
-    with engine.connect() as conn:
-        df = pd.read_sql(text(query), conn)
-    return df
 
 # ────────────────────────────────────────────────────────────────────────────
 # Data processing
@@ -897,8 +890,40 @@ def calculate_metrics(df: pd.DataFrame, mtd_month_label: Optional[str] = None) -
     if mtd_month_label and mtd_month_label != "All" and "enroll_month" in df.columns:
         mtd_mask = mtd_mask & (df["enroll_month"] == mtd_month_label)
 
+    # ── Last Day logic (IST) ────────────────────────────────────────────
+    # "Last day" = most recent calendar_day in the data that is on/before
+    # today in IST. Using IST ensures the cut-off matches what admins in
+    # India see on the wall-clock, regardless of where the server runs.
+    last_day_ts: Optional[pd.Timestamp] = None
+    last_day_mask = pd.Series(False, index=df.index)
+    if "shopping_date" in df.columns and df["shopping_date"].notna().any():
+        today = today_ist()
+        valid_dates = df["shopping_date"].where(df["shopping_date"] <= today)
+        if valid_dates.notna().any():
+            last_day_ts = valid_dates.max().normalize()
+            last_day_mask = (df["shopping_date"].dt.normalize() == last_day_ts)
+
     # Core counts
     total_cust = df.groupby(group_cols)["mobile_number"].nunique().rename("Total NOC")
+
+    # NEW: Last Day NOC (unique customers on the last day, per store)
+    if last_day_mask.any():
+        last_day_noc = (df[last_day_mask]
+                        .groupby(group_cols)["mobile_number"].nunique()
+                        .rename("Last Day NOC"))
+    else:
+        last_day_noc = pd.Series(dtype=int, name="Last Day NOC")
+
+    # NEW: Last Day Member Enrollment — customers on the last day whose
+    # msr_month (dd-mm-yyyy) equals that day's calendar_day.
+    # The existing `is_day_enrollment` flag already encodes exactly this.
+    if last_day_mask.any() and "is_day_enrollment" in df.columns:
+        last_day_enroll = (df[last_day_mask & df["is_day_enrollment"]]
+                           .groupby(group_cols)["mobile_number"].nunique()
+                           .rename("Last Day Member Enrollment"))
+    else:
+        last_day_enroll = pd.Series(dtype=int, name="Last Day Member Enrollment")
+
     mtd        = df[mtd_mask].groupby(group_cols)["mobile_number"].nunique().rename("MTD Enrollment")
     msr_cnt    = df[df["is_msr"]].groupby(group_cols)["mobile_number"].nunique().rename("Unique MSR Members")
     non_msr    = df[~df["is_msr"]].groupby(group_cols)["mobile_number"].nunique().rename("Unique Non-MSR Members")
@@ -910,7 +935,8 @@ def calculate_metrics(df: pd.DataFrame, mtd_month_label: Optional[str] = None) -
     nob_gt = _count_bills(gt_df, group_cols).rename("Bills >2K")
     nob_lt = _count_bills(lt_df, group_cols).rename("Bills ≤2K")
 
-    metrics = (pd.concat([total_cust, mtd, msr_cnt, non_msr, nob_gt, nob_lt], axis=1)
+    metrics = (pd.concat([total_cust, last_day_noc, last_day_enroll,
+                          mtd, msr_cnt, non_msr, nob_gt, nob_lt], axis=1)
                  .fillna(0).astype(int, errors="ignore").reset_index())
 
     # NEW Conversion = MTD Enrollment / Total NOC × 100
@@ -923,10 +949,15 @@ def calculate_metrics(df: pd.DataFrame, mtd_month_label: Optional[str] = None) -
     rename = {"store_code":"Store Code","store_name":"Store Name","asm_name":"ASM Name"}
     metrics = metrics.rename(columns=rename)
     order = (list(rename.values()) +
-             ["Total NOC","MTD Enrollment","Unique MSR Members","Unique Non-MSR Members",
+             ["Total NOC", "Last Day NOC", "Last Day Member Enrollment",
+              "MTD Enrollment","Unique MSR Members","Unique Non-MSR Members",
               "Conversion %","Bills >2K","Bills ≤2K"])
     cols = [c for c in order if c in metrics.columns]
-    return metrics[cols].sort_values("Total NOC", ascending=False)
+    result = metrics[cols].sort_values("Total NOC", ascending=False)
+
+    # Stash the detected last-day so the dashboard can show it in a caption
+    result.attrs["last_day"] = last_day_ts
+    return result
 
 
 @st.cache_data(show_spinner=False)
@@ -1129,17 +1160,24 @@ DRILL_DISPLAY_RENAME = {
 # UI helpers
 # ────────────────────────────────────────────────────────────────────────────
 def render_hero(subtitle="Customer & MSR Membership Performance"):
-    badge = ""
+    ist_stamp = now_ist().strftime("%d %b %Y · %H:%M IST")
+    badges = []
     if st.session_state.data_loaded:
         src = st.session_state.data_source or "Data"
-        badge = f'<div class="badge">● Live · {src}</div>'
+        badges.append(f'<div class="badge">● Live · {src}</div>')
+    badges.append(f'<div class="badge">🕒 {ist_stamp}</div>')
+    if auth.is_logged_in():
+        badges.append(f'<div class="badge">👤 {auth.current_user()}</div>')
+    badges_html = "".join(badges)
     st.markdown(f"""
     <div class="hero">
         <div>
             <h1>🛒 MySpencers Rewards Dashboard</h1>
             <div class="tag">{subtitle}</div>
         </div>
-        {badge}
+        <div style="display:flex;gap:.4rem;flex-wrap:wrap;justify-content:flex-end;">
+            {badges_html}
+        </div>
     </div>""", unsafe_allow_html=True)
 
 def kpi(label, value, sub="", accent="blue"):
@@ -1277,15 +1315,19 @@ def style_metrics(df: pd.DataFrame):
     return s
 
 # ────────────────────────────────────────────────────────────────────────────
-# Landing page — Upload + AWS RDS
+# Landing page — Upload + Manage Storage (ADMIN ONLY)
 # ────────────────────────────────────────────────────────────────────────────
 def landing_page():
     render_hero("Connect a data source to begin")
     st.write("")
 
-    tab_upload, tab_rds, tab_sample, tab_storage = st.tabs([
+    # Safety net — this page should never render for non-admins; main() guards it
+    if not auth.is_logged_in():
+        st.error("🔒 You must be signed in as an admin to access this page.")
+        return
+
+    tab_upload, tab_sample, tab_storage = st.tabs([
         "📁 Upload Files",
-        "🗄️ AWS RDS (Live DB)",
         "🧪 Sample Data",
         "💾 Manage Storage",
     ])
@@ -1434,106 +1476,6 @@ def landing_page():
                 st.session_state.page                = "dashboard"
                 st.cache_data.clear()
                 st.rerun()
-
-    # ── AWS RDS ────────────────────────────────────────────────────────────
-    with tab_rds:
-        st.markdown("""
-        <div style="background:var(--bg-card);border:1px solid var(--border);
-                    border-radius:14px;padding:1.4rem;margin-bottom:1rem;">
-            <h3 style="color:#f5c646;margin:0 0 .5rem 0;">🗄️ Connect to AWS RDS</h3>
-            <p style="color:#a6b4c8;margin:0;font-size:.9rem;">
-                Live-load your MSR data from an AWS RDS instance (MySQL, MariaDB, Aurora-MySQL, PostgreSQL, Aurora-Postgres).
-                <br>Ensure the RDS security group allows inbound connections from this host's IP.
-                <br><b>Prereq:</b> <code>pip install sqlalchemy pymysql psycopg2-binary</code>
-            </p>
-        </div>""", unsafe_allow_html=True)
-
-        c1, c2 = st.columns(2)
-        with c1:
-            engine_type = st.selectbox(
-                "Engine",
-                ["mysql", "postgresql"],
-                index=0,
-                help="Pick the RDS engine type",
-            )
-            host = st.text_input(
-                "Host / Endpoint",
-                placeholder="your-db.abcd1234.ap-south-1.rds.amazonaws.com",
-                value=st.session_state.rds_config.get("host", ""),
-            )
-            database = st.text_input(
-                "Database",
-                placeholder="spencers_msr",
-                value=st.session_state.rds_config.get("database", ""),
-            )
-        with c2:
-            default_port = 3306 if engine_type == "mysql" else 5432
-            port = st.number_input(
-                "Port", min_value=1, max_value=65535,
-                value=int(st.session_state.rds_config.get("port", default_port)),
-            )
-            user = st.text_input(
-                "Username",
-                placeholder="admin",
-                value=st.session_state.rds_config.get("user", ""),
-            )
-            password = st.text_input(
-                "Password",
-                type="password",
-                value=st.session_state.rds_config.get("password", ""),
-            )
-
-        default_query = st.session_state.rds_config.get(
-            "query",
-            "SELECT calendar_day, store_code, store_name, mobile_number, bill_no,\n"
-            "       grs_sales, msr_number, msr_month, noc_tagging, msr_tagging,\n"
-            "       asm_name, month_name, nob_ach, billed_qty\n"
-            "FROM msr_transactions\n"
-            "WHERE calendar_day >= DATE_SUB(CURRENT_DATE, INTERVAL 90 DAY);",
-        )
-        query = st.text_area(
-            "SQL Query",
-            value=default_query, height=160,
-            help="Must return the required columns. You can schedule this in cron / Airflow for scheduled refreshes.",
-        )
-
-        b1, b2 = st.columns([1, 1])
-        with b1:
-            test_btn = st.button("🔌 Test Connection", use_container_width=True, key="btn_test_rds")
-        with b2:
-            load_btn = st.button("🚀 Connect & Load", use_container_width=True, key="btn_load_rds")
-
-        # Persist form for UX
-        st.session_state.rds_config = {
-            "engine_type": engine_type, "host": host, "port": int(port),
-            "database": database, "user": user, "password": password, "query": query,
-        }
-
-        if test_btn:
-            try:
-                with st.spinner("Testing RDS connection…"):
-                    _ = load_from_rds(engine_type, host, int(port), database, user, password, "SELECT 1 AS ok")
-                st.success("✅ Connection successful. Credentials & network reachable.")
-            except Exception as e:
-                st.error(f"❌ Connection failed: {e}")
-
-        if load_btn:
-            try:
-                with st.spinner("Running query on RDS…"):
-                    df_rds = load_from_rds(engine_type, host, int(port), database, user, password, query)
-                if df_rds.empty:
-                    st.warning("Query returned no rows.")
-                else:
-                    st.session_state.raw_df = df_rds
-                    st.session_state.data_loaded = True
-                    st.session_state.data_source = f"RDS · {engine_type}@{host.split('.')[0]}"
-                    st.session_state.uploaded_files_info = [f"RDS: {database}"]
-                    st.session_state.rds_connected = True
-                    st.session_state.page = "dashboard"
-                    st.success(f"Loaded {len(df_rds):,} rows from RDS.")
-                    st.rerun()
-            except Exception as e:
-                st.error(f"❌ Load failed: {e}")
 
     # ── Sample ─────────────────────────────────────────────────────────────
     with tab_sample:
@@ -1741,9 +1683,13 @@ def _sample_data(n=3000):
 def render_sidebar(df: pd.DataFrame, metrics_df: pd.DataFrame, dd_df: pd.DataFrame) -> dict:
     st.sidebar.markdown("## ⚙️ Controls")
 
-    if st.sidebar.button("🔄 Change / Add Files", use_container_width=True):
-        st.session_state.page = "landing"
-        st.rerun()
+    # Upload / admin-only button
+    if auth.is_logged_in():
+        if st.sidebar.button("🔄 Change / Add Files", use_container_width=True):
+            st.session_state.page = "landing"
+            st.rerun()
+    else:
+        st.sidebar.caption("👁️ Viewer mode · Sign in as admin below to upload data.")
 
     if st.session_state.uploaded_files_info:
         st.sidebar.caption("📦 Loaded: " + " | ".join(st.session_state.uploaded_files_info))
@@ -2078,11 +2024,14 @@ def dashboard_page():
         render_charts(metrics, filtered)
 
         section("Store-level Metrics Table", "🏬")
+        last_day_attr = metrics.attrs.get("last_day") if hasattr(metrics, "attrs") else None
+        last_day_str  = pd.Timestamp(last_day_attr).strftime("%d-%m-%Y") if pd.notna(last_day_attr) else "—"
         st.caption(
             f"Showing **{len(metrics):,}** stores · "
             f"**{len(filtered):,}** transactions · "
             f"**{filtered['mobile_number'].nunique():,}** unique customers · "
-            f"MTD Month: **{mtd_label}**"
+            f"MTD Month: **{mtd_label}** · "
+            f"Last Day (IST): **{last_day_str}**"
         )
         render_table(metrics)
 
@@ -2128,13 +2077,56 @@ def dashboard_page():
                 st.caption(f"Excel unavailable: {e}")
 
 # ────────────────────────────────────────────────────────────────────────────
+# Viewer-only "no data yet" page
+# ────────────────────────────────────────────────────────────────────────────
+def viewer_no_data_page():
+    """Shown to unauthenticated visitors when storage is empty."""
+    render_hero("Live dashboard · waiting for admin to upload data")
+    st.markdown("""
+    <div style="background:var(--bg-card);border:1px solid var(--border);
+                border-radius:14px;padding:2rem;margin-top:1rem;text-align:center;">
+        <h2 style="color:#f5c646;margin:0 0 .6rem 0;">📭 No data available yet</h2>
+        <p style="color:#a6b4c8;font-size:.95rem;margin:0;">
+            An admin has not uploaded any data to this dashboard yet.<br>
+            Please check back later, or contact your administrator.
+        </p>
+        <p style="color:#7689a3;font-size:.82rem;margin-top:1rem;">
+            Admins: sign in from the sidebar to upload your first file.
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+# ────────────────────────────────────────────────────────────────────────────
 # Router
 # ────────────────────────────────────────────────────────────────────────────
 def main():
-    if st.session_state.page == "landing" or not st.session_state.data_loaded:
+    # 🔐 Render auth panel in the sidebar on every rerun. Returns True if
+    # the viewer is signed in as an admin.
+    is_admin = auth.render_auth_sidebar()
+
+    # Non-admins are never allowed on the landing (upload / manage) page.
+    # If they somehow land there (e.g. stale session), bounce them to the
+    # dashboard or the viewer-waiting screen.
+    if not is_admin and st.session_state.page == "landing":
+        st.session_state.page = "dashboard"
+
+    # Route
+    if st.session_state.page == "landing":
+        # Landing is admin-only (guaranteed by the check above).
         landing_page()
     else:
-        dashboard_page()
+        if st.session_state.data_loaded:
+            dashboard_page()
+        else:
+            # No data stored yet.
+            if is_admin:
+                # Send the admin straight to the upload page.
+                st.session_state.page = "landing"
+                st.rerun()
+            else:
+                viewer_no_data_page()
+
 
 if __name__ == "__main__":
     main()

@@ -578,6 +578,18 @@ def process_data(raw: pd.DataFrame) -> pd.DataFrame:
         df["is_prev_enrollment"] = False
         df["is_fut_enrollment"]  = False
 
+    # DAY-level enrollment: msr_month formatted as dd-mm-yyyy must match calendar_day exactly
+    if "msr_month_dt" in df.columns and "calendar_day" in df.columns:
+        msr_day_str = df["msr_month_dt"].dt.strftime("%d-%m-%Y")
+        df["is_day_enrollment"] = (
+            df["is_msr"]
+            & msr_day_str.notna()
+            & df["calendar_day"].notna()
+            & (msr_day_str == df["calendar_day"].astype(str))
+        )
+    else:
+        df["is_day_enrollment"] = False
+
     # Numeric coercions
     for c in ["grs_sales","nob_ach","billed_qty"]:
         if c in df.columns:
@@ -657,12 +669,11 @@ def calculate_drilldown(df: pd.DataFrame, mtd_month_label: Optional[str] = None)
 
     group = [c for c in ["Day","store_code","store_name"] if c in df.columns]
 
-    mtd_mask = df["is_mtd_enrollment"] if "is_mtd_enrollment" in df.columns else pd.Series(False, index=df.index)
-    if mtd_month_label and mtd_month_label != "All" and "enroll_month" in df.columns:
-        mtd_mask = mtd_mask & (df["enroll_month"] == mtd_month_label)
+    # DAY Enrollment: use day-exact match (msr_month dd-mm-yyyy == calendar_day)
+    day_mask = df["is_day_enrollment"] if "is_day_enrollment" in df.columns else pd.Series(False, index=df.index)
 
     total_noc  = df.groupby(group)["mobile_number"].nunique().rename("Total NOC")
-    enrollment = df[mtd_mask].groupby(group)["mobile_number"].nunique().rename("Enrollment")
+    enrollment = df[day_mask].groupby(group)["mobile_number"].nunique().rename("DAY Enrollment")
     msr_cnt    = df[df["is_msr"]].groupby(group)["mobile_number"].nunique().rename("Unique MSR Members")
     non_msr    = df[~df["is_msr"]].groupby(group)["mobile_number"].nunique().rename("Unique Non-MSR Members")
 
@@ -678,13 +689,13 @@ def calculate_drilldown(df: pd.DataFrame, mtd_month_label: Optional[str] = None)
 
     dd["Conversion %"] = np.where(
         dd["Total NOC"] > 0,
-        (dd["Enrollment"] / dd["Total NOC"] * 100).round(2),
+        (dd["DAY Enrollment"] / dd["Total NOC"] * 100).round(2),
         0.0,
     )
 
     rename = {"store_code":"Store Code","store_name":"Store Name"}
     dd = dd.rename(columns=rename)
-    order = ["Day","Store Code","Store Name","Total NOC","Enrollment","Unique MSR Members",
+    order = ["Day","Store Code","Store Name","Total NOC","DAY Enrollment","Unique MSR Members",
              "Unique Non-MSR Members","Conversion %","Bills >2K","Bills ≤2K"]
     cols = [c for c in order if c in dd.columns]
     return dd[cols].sort_values(["Day","Store Code"], ascending=[False, True])
@@ -743,6 +754,105 @@ def to_excel_bytes(df: pd.DataFrame, sheet_name: str = "MSR Metrics") -> bytes:
                 ws.set_column(i, i, w)
     buf.seek(0)
     return buf.getvalue()
+
+
+def to_pdf_bytes(df: pd.DataFrame, title: str = "MSR Report") -> bytes:
+    """Generate a styled PDF table from a DataFrame using reportlab."""
+    try:
+        from reportlab.lib import colors
+        from reportlab.lib.pagesizes import A3, landscape
+        from reportlab.lib.styles import getSampleStyleSheet
+        from reportlab.lib.units import cm
+        from reportlab.platypus import (Paragraph, SimpleDocTemplate,
+                                        Spacer, Table, TableStyle)
+    except ImportError:
+        raise ImportError(
+            "reportlab is required for PDF export. "
+            "Install: pip install reportlab"
+        )
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=landscape(A3),
+                            leftMargin=1*cm, rightMargin=1*cm,
+                            topMargin=1.5*cm, bottomMargin=1.5*cm)
+
+    styles = getSampleStyleSheet()
+    title_style = styles["Heading1"]
+    title_style.textColor = colors.HexColor("#D4A017")
+    title_style.fontSize = 14
+    title_style.spaceAfter = 10
+
+    elements = []
+    elements.append(Paragraph(f"Spencer's Retail — {title}", title_style))
+    from datetime import datetime as _dt
+    elements.append(Paragraph(
+        f"Generated: {_dt.now().strftime('%d-%m-%Y %H:%M')}  |  Rows: {len(df):,}",
+        styles["Normal"]
+    ))
+    elements.append(Spacer(1, 0.4*cm))
+
+    # Build table data
+    col_names = [str(c) for c in df.columns]
+    data = [col_names]
+    for _, row in df.iterrows():
+        data.append([str(v) for v in row])
+
+    # Compute column widths proportionally
+    page_w = landscape(A3)[0] - 2*cm
+    n_cols = len(col_names)
+    col_w  = page_w / n_cols
+
+    tbl = Table(data, colWidths=[col_w] * n_cols, repeatRows=1)
+    tbl.setStyle(TableStyle([
+        # Header
+        ("BACKGROUND",  (0, 0), (-1, 0), colors.HexColor("#0B2545")),
+        ("TEXTCOLOR",   (0, 0), (-1, 0), colors.HexColor("#f5c646")),
+        ("FONTNAME",    (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE",    (0, 0), (-1, 0), 7),
+        ("ALIGN",       (0, 0), (-1, 0), "CENTER"),
+        ("VALIGN",      (0, 0), (-1, 0), "MIDDLE"),
+        ("BOTTOMPADDING", (0, 0), (-1, 0), 6),
+        ("TOPPADDING",  (0, 0), (-1, 0), 6),
+        # Body
+        ("BACKGROUND",  (0, 1), (-1, -1), colors.HexColor("#1a2233")),
+        ("TEXTCOLOR",   (0, 1), (-1, -1), colors.HexColor("#e8eef5")),
+        ("FONTNAME",    (0, 1), (-1, -1), "Helvetica"),
+        ("FONTSIZE",    (0, 1), (-1, -1), 6.5),
+        ("ALIGN",       (0, 1), (-1, -1), "CENTER"),
+        ("VALIGN",      (0, 1), (-1, -1), "MIDDLE"),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1),
+         [colors.HexColor("#1a2233"), colors.HexColor("#111827")]),
+        # Grid
+        ("GRID",        (0, 0), (-1, -1), 0.4, colors.HexColor("#2a3447")),
+        ("LINEBELOW",   (0, 0), (-1, 0), 1.2, colors.HexColor("#D4A017")),
+        # Padding
+        ("BOTTOMPADDING", (0, 1), (-1, -1), 4),
+        ("TOPPADDING",  (0, 1), (-1, -1), 4),
+    ]))
+    elements.append(tbl)
+    doc.build(elements)
+    buf.seek(0)
+    return buf.getvalue()
+
+
+# ── Display rename mappings ──────────────────────────────────────────────────
+STORE_DISPLAY_RENAME = {
+    "MTD Enrollment"        : "MTD Member Enrollment",
+    "Unique MSR Members"    : "MTD Member Shopped",
+    "Unique Non-MSR Members": "MTD Non Member Shopped",
+    "Conversion %"          : "Member Enrollment Conversion %",
+    "Bills >2K"             : "Member is >2k Bill",
+    "Bills ≤2K"             : "Non Member in <2k Bill",
+}
+
+DRILL_DISPLAY_RENAME = {
+    "DAY Enrollment"        : "DAY Enrollment",          # already correct
+    "Unique MSR Members"    : "MTD Member Shopped",
+    "Unique Non-MSR Members": "MTD Non Member Shopped",
+    "Conversion %"          : "Member Enrollment Conversion %",
+    "Bills >2K"             : "Member is >2k Bill",
+    "Bills ≤2K"             : "Non Member in <2k Bill",
+}
 
 # ────────────────────────────────────────────────────────────────────────────
 # UI helpers
@@ -880,8 +990,9 @@ def color_conversion(val):
 
 def style_metrics(df: pd.DataFrame):
     s = df.style
-    if "Conversion %" in df.columns:
-        s = s.map(color_conversion, subset=["Conversion %"])
+    conv_col = next((c for c in df.columns if "Conversion" in c or "conversion" in c), None)
+    if conv_col:
+        s = s.map(color_conversion, subset=[conv_col])
     # overall dark styling for the styler
     s = s.set_table_styles([
         {"selector": "th", "props": [("background-color", "#111827"),
@@ -1226,7 +1337,7 @@ def render_kpis(metrics_df, filtered_df, mtd_label):
     c = st.columns(4, gap="medium")
     with c[0]: kpi("Total Unique NOC", f"{total:,}",
                    f"Across {n_stores} stores", "blue")
-    with c[1]: kpi("Unique MSR Members", f"{msr_mem:,}",
+    with c[1]: kpi("Members Shopped", f"{msr_mem:,}",
                    f"MTD Enrollment: {mtd_reg:,} ({mtd_label})", "gold")
     with c[2]: kpi("Conversion %", f"{conv:.1f}%",
                    "MTD Enrollment / Total NOC", "green")
@@ -1341,21 +1452,49 @@ def render_table(metrics_df, label="Store-level"):
     if metrics_df.empty:
         st.info("No records match the current filters.")
         return
-    display = metrics_df.copy()
-    if "Conversion %" in display.columns:
-        display["Conversion %"] = display["Conversion %"].apply(lambda v: f"{v:.2f}%")
+    display = metrics_df.copy().rename(columns=STORE_DISPLAY_RENAME)
+    conv_col = "Member Enrollment Conversion %"
+    if conv_col in display.columns:
+        display[conv_col] = display[conv_col].apply(lambda v: f"{v:.2f}%")
     styled = style_metrics(display)
     st.dataframe(styled, use_container_width=True, height=480)
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M")
+    dl1, dl2 = st.columns(2)
+    with dl1:
+        try:
+            pdf_b = to_pdf_bytes(display, "Store Level Metrics")
+            st.download_button(
+                "⬇️ Download PDF – Store Metrics", pdf_b,
+                f"store_metrics_{ts}.pdf", "application/pdf",
+                use_container_width=True, key=f"pdf_store_{ts}"
+            )
+        except Exception as e:
+            st.caption(f"PDF unavailable: {e}")
 
 def render_drilldown_table(dd_df):
     if dd_df.empty:
         st.info("No drill-down data for current filters.")
         return
-    display = dd_df.copy()
-    if "Conversion %" in display.columns:
-        display["Conversion %"] = display["Conversion %"].apply(lambda v: f"{v:.2f}%")
+    display = dd_df.copy().rename(columns=DRILL_DISPLAY_RENAME)
+    conv_col = "Member Enrollment Conversion %"
+    if conv_col in display.columns:
+        display[conv_col] = display[conv_col].apply(lambda v: f"{v:.2f}%")
     styled = style_metrics(display)
     st.dataframe(styled, use_container_width=True, height=540)
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M")
+    dl1, dl2 = st.columns(2)
+    with dl1:
+        try:
+            pdf_b = to_pdf_bytes(display, "Day Level Metrics")
+            st.download_button(
+                "⬇️ Download PDF – Day Metrics", pdf_b,
+                f"day_metrics_{ts}.pdf", "application/pdf",
+                use_container_width=True, key=f"pdf_day_{ts}"
+            )
+        except Exception as e:
+            st.caption(f"PDF unavailable: {e}")
 
 # ────────────────────────────────────────────────────────────────────────────
 # Dashboard page

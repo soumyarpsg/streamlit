@@ -7,7 +7,8 @@ the same SQLite file the dashboard already uses (`msr_data.db`) in a dedicated
 
 Features
 --------
-• Sign up (create admin account)
+• Pre-seeded admin accounts (defined in `_SEED_ADMINS` below) — created on
+  first run. Self-service sign-up is disabled.
 • Sign in / Sign out
 • PBKDF2-SHA256 password hashing with per-user salt (no plain-text passwords)
 • Streamlit session-based login tracking
@@ -23,6 +24,12 @@ Usage from your dashboard
     if is_admin:
         # show upload controls, etc.
         ...
+
+Rotating a seeded password
+--------------------------
+Either (a) edit `_SEED_ADMINS` below, delete that user's row from `admin_users`
+in msr_data.db, and restart the app, or (b) connect to the DB and update the
+`password_hash` + `salt` columns directly.
 """
 
 from __future__ import annotations
@@ -49,6 +56,19 @@ PBKDF2_ITERATIONS = 200_000
 # Minimum password strength
 MIN_PASSWORD_LEN = 6
 
+# ────────────────────────────────────────────────────────────────────────────
+# Pre-seeded admin accounts
+# ────────────────────────────────────────────────────────────────────────────
+# These accounts are created automatically on first app start. Seeding is
+# idempotent — if an account with the given username already exists, its
+# password is NOT overwritten. To rotate a password, delete the row from
+# `admin_users` in msr_data.db and restart the app.
+_SEED_ADMINS: list[tuple[str, str]] = [
+    ("soumya.mukherjee1@rpsg.in", "marketingdatateam"),
+    ("ajeet.bawa@rpsg.in",        "marketingdatateam"),
+    ("manas.chattaraj@rpsg.in",   "marketingdatateam"),
+]
+
 
 def _db_connect() -> sqlite3.Connection:
     conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
@@ -57,7 +77,8 @@ def _db_connect() -> sqlite3.Connection:
 
 
 def init_auth_db() -> None:
-    """Create the admin_users table on first run."""
+    """Create the admin_users table on first run AND seed the pre-configured
+    admin accounts if they don't exist yet."""
     with _db_connect() as conn:
         conn.execute(f"""
             CREATE TABLE IF NOT EXISTS {USERS_TABLE} (
@@ -70,6 +91,34 @@ def init_auth_db() -> None:
             )
         """)
         conn.commit()
+    _seed_admins()
+
+
+def _seed_admins() -> None:
+    """Create each account in `_SEED_ADMINS` if it doesn't exist already.
+    Idempotent — safe to call on every import / every rerun."""
+    now = datetime.now().isoformat(timespec="seconds")
+    for username, password in _SEED_ADMINS:
+        try:
+            with _db_connect() as conn:
+                already = conn.execute(
+                    f"SELECT 1 FROM {USERS_TABLE} WHERE username = ?",
+                    (username,),
+                ).fetchone()
+                if already:
+                    continue  # don't overwrite existing accounts
+                salt     = secrets.token_hex(16)
+                pwd_hash = _hash_password(password, salt)
+                conn.execute(
+                    f"INSERT INTO {USERS_TABLE} "
+                    f"(username, password_hash, salt, created_at) VALUES (?, ?, ?, ?)",
+                    (username, pwd_hash, salt, now),
+                )
+                conn.commit()
+        except Exception:
+            # Never let a seeding failure crash the app; the user can still
+            # sign in with any accounts that were seeded successfully.
+            pass
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -91,10 +140,11 @@ def _validate_username(username: str) -> Optional[str]:
         return "Username is required."
     if len(username) < 3:
         return "Username must be at least 3 characters."
-    if len(username) > 32:
-        return "Username must be 32 characters or fewer."
-    if not re.match(r"^[A-Za-z0-9_.-]+$", username):
-        return "Username may only contain letters, digits, '.', '_' and '-'."
+    if len(username) > 128:
+        return "Username must be 128 characters or fewer."
+    # Allow email-format usernames (letters, digits, '.', '_', '+', '@', '-')
+    if not re.match(r"^[A-Za-z0-9_.+@-]+$", username):
+        return "Username may only contain letters, digits, '.', '_', '+', '@' and '-'."
     return None
 
 
@@ -107,36 +157,8 @@ def _validate_password(password: str) -> Optional[str]:
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# Public API: sign up / sign in / sign out
+# Public API: sign in / sign out
 # ────────────────────────────────────────────────────────────────────────────
-def sign_up(username: str, password: str) -> Tuple[bool, str]:
-    """Create a new admin account. Returns (ok, message)."""
-    username = (username or "").strip()
-    password = password or ""
-
-    err = _validate_username(username) or _validate_password(password)
-    if err:
-        return False, err
-
-    salt = secrets.token_hex(16)
-    pwd_hash = _hash_password(password, salt)
-    now = datetime.now().isoformat(timespec="seconds")
-
-    try:
-        with _db_connect() as conn:
-            conn.execute(
-                f"INSERT INTO {USERS_TABLE} "
-                f"(username, password_hash, salt, created_at) VALUES (?, ?, ?, ?)",
-                (username, pwd_hash, salt, now),
-            )
-            conn.commit()
-        return True, f"Account created for '{username}'. You can sign in now."
-    except sqlite3.IntegrityError:
-        return False, f"Username '{username}' is already taken."
-    except Exception as e:
-        return False, f"Could not create account: {e}"
-
-
 def sign_in(username: str, password: str) -> Tuple[bool, str]:
     """Verify credentials and mark session as logged in."""
     username = (username or "").strip()
@@ -184,25 +206,15 @@ def current_user() -> Optional[str]:
     return st.session_state.get("auth_user")
 
 
-def user_count() -> int:
-    """Count of admin accounts — handy for 'No admins yet, sign up' banners."""
-    try:
-        with _db_connect() as conn:
-            return int(conn.execute(
-                f"SELECT COUNT(*) FROM {USERS_TABLE}"
-            ).fetchone()[0])
-    except sqlite3.OperationalError:
-        return 0
-
-
 # ────────────────────────────────────────────────────────────────────────────
 # Streamlit sidebar UI
 # ────────────────────────────────────────────────────────────────────────────
 def render_auth_sidebar() -> bool:
-    """Draw the login / signup panel in the sidebar.
+    """Draw the sign-in panel in the sidebar.
 
-    Returns True if the current session is logged in as an admin.
-    Call this once per rerun, near the top of `main()`.
+    Self-service sign-up is disabled — admin accounts are pre-seeded via
+    `_SEED_ADMINS`. Returns True if the current session is logged in as
+    an admin. Call this once per rerun, near the top of `main()`.
     """
     init_auth_db()
 
@@ -214,7 +226,8 @@ def render_auth_sidebar() -> bool:
             st.markdown(
                 f"""<div style="background:#1e4430;border:1px solid #2A9D8F;
                                color:#8ff0a8;padding:.55rem .8rem;border-radius:8px;
-                               font-size:.85rem;margin-bottom:.5rem;">
+                               font-size:.85rem;margin-bottom:.5rem;
+                               word-break:break-all;">
                       ✅ Signed in as <b>{uname}</b>
                     </div>""",
                 unsafe_allow_html=True,
@@ -224,31 +237,17 @@ def render_auth_sidebar() -> bool:
                 st.rerun()
             return True
 
-        # Not logged in — show sign-in / sign-up form
+        # Not logged in — sign-in form only (sign-up is disabled)
         st.caption(
             "Viewers can see the dashboard without signing in. "
-            "Only admins can upload or manage data."
-        )
-
-        n_users = user_count()
-        default_mode_idx = 1 if n_users == 0 else 0   # first-run → default to Sign Up
-        if n_users == 0:
-            st.info("No admin accounts exist yet. Create the first one below.")
-
-        mode = st.radio(
-            "Action",
-            ["Sign In", "Sign Up"],
-            index=default_mode_idx,
-            horizontal=True,
-            label_visibility="collapsed",
-            key="auth_mode",
+            "Only authorised admins can upload or manage data."
         )
 
         username = st.text_input(
             "Username",
             key="auth_username_input",
-            placeholder="your.username",
-            max_chars=32,
+            placeholder="name@rpsg.in",
+            max_chars=128,
         )
         password = st.text_input(
             "Password",
@@ -256,33 +255,13 @@ def render_auth_sidebar() -> bool:
             key="auth_password_input",
             placeholder="••••••••",
         )
-
-        if mode == "Sign In":
-            if st.button("🔓 Sign In", use_container_width=True,
-                         key="auth_signin_btn", type="primary"):
-                ok, msg = sign_in(username, password)
-                if ok:
-                    st.success(msg)
-                    st.rerun()
-                else:
-                    st.error(msg)
-        else:
-            confirm = st.text_input(
-                "Confirm Password",
-                type="password",
-                key="auth_confirm_input",
-                placeholder="••••••••",
-            )
-            if st.button("📝 Create Admin Account",
-                         use_container_width=True, key="auth_signup_btn",
-                         type="primary"):
-                if password != confirm:
-                    st.error("Passwords do not match.")
-                else:
-                    ok, msg = sign_up(username, password)
-                    if ok:
-                        st.success(msg)
-                    else:
-                        st.error(msg)
+        if st.button("🔓 Sign In", use_container_width=True,
+                     key="auth_signin_btn", type="primary"):
+            ok, msg = sign_in(username, password)
+            if ok:
+                st.success(msg)
+                st.rerun()
+            else:
+                st.error(msg)
 
     return False

@@ -841,8 +841,8 @@ STORE_DISPLAY_RENAME = {
     "Unique MSR Members"    : "MTD Member Shopped",
     "Unique Non-MSR Members": "MTD Non Member Shopped",
     "Conversion %"          : "Member Enrollment Conversion %",
-    "Bills >2K"             : "Member is >2k Bill",
-    "Bills ≤2K"             : "Non Member in <2k Bill",
+    "Bills >2K"             : "Non Member >2k Bill",
+    "Bills ≤2K"             : "Non Member <2k Bill",
 }
 
 DRILL_DISPLAY_RENAME = {
@@ -850,8 +850,8 @@ DRILL_DISPLAY_RENAME = {
     "Unique MSR Members"    : "MTD Member Shopped",
     "Unique Non-MSR Members": "MTD Non Member Shopped",
     "Conversion %"          : "Member Enrollment Conversion %",
-    "Bills >2K"             : "Member is >2k Bill",
-    "Bills ≤2K"             : "Non Member in <2k Bill",
+    "Bills >2K"             : "Non Member >2k Bill",
+    "Bills ≤2K"             : "Non Member <2k Bill",
 }
 
 # ────────────────────────────────────────────────────────────────────────────

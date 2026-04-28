@@ -1,4 +1,4 @@
-""""
+"""
 MySpencers Rewards (MSR) Dashboard — Spencer's Red & White Edition
 ==================================================================
 Features:
@@ -1277,6 +1277,7 @@ def to_pdf_bytes(df: pd.DataFrame, title: str = "MSR Report") -> bytes:
         from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
         from reportlab.lib.enums import TA_CENTER
         from reportlab.lib.units import cm, mm
+        from reportlab.pdfbase import pdfmetrics
         from reportlab.platypus import (Paragraph, SimpleDocTemplate,
                                         Spacer, Table, TableStyle)
     except ImportError:
@@ -1322,6 +1323,11 @@ def to_pdf_bytes(df: pd.DataFrame, title: str = "MSR Report") -> bytes:
     )
 
     # ── Table-cell paragraph styles (font size 18, black, centred) ───────
+    # IMPORTANT: no `wordWrap='CJK'` — that breaks words mid-character (e.g.
+    # turning "Shopped" into "Shop\nped"). The default reportlab wrapping
+    # breaks only at whitespace, which is exactly what the user asked for.
+    # We make sure every column is wide enough for its longest single word
+    # so that no word ever overflows.
     header_para_style = ParagraphStyle(
         "HeaderPara",
         parent=styles["Normal"],
@@ -1330,7 +1336,7 @@ def to_pdf_bytes(df: pd.DataFrame, title: str = "MSR Report") -> bytes:
         leading=22,            # generous line-height so wrapped text breathes
         textColor=colors.black,
         alignment=TA_CENTER,
-        wordWrap="CJK",        # break inside long words if absolutely needed
+        splitLongWords=False,  # never break a word in the middle
     )
     cell_para_style = ParagraphStyle(
         "CellPara",
@@ -1340,7 +1346,7 @@ def to_pdf_bytes(df: pd.DataFrame, title: str = "MSR Report") -> bytes:
         leading=22,
         textColor=colors.black,
         alignment=TA_CENTER,
-        wordWrap="CJK",
+        splitLongWords=False,
     )
 
     # ── Header / body content ────────────────────────────────────────────
@@ -1362,37 +1368,89 @@ def to_pdf_bytes(df: pd.DataFrame, title: str = "MSR Report") -> bytes:
         data.append([Paragraph(str(v) if pd.notna(v) else "", cell_para_style)
                      for v in row])
 
-    # ── Compute column widths proportionally to content length ───────────
-    page_w_pt = page[0] - 2.4*cm   # available width after margins
-    col_lens = []
-    sample = df.head(80)            # sample rows to estimate width
+    # ── Compute column widths so no single word ever needs to wrap ───────
+    # Strategy:
+    #   1. For each column, measure (in points) the actual width of:
+    #        (a) the longest single WORD in the header,
+    #        (b) the widest cell value in the body.
+    #      Use whichever is larger as the column's MIN width — this is the
+    #      width below which a word would have to be hyphenated/broken.
+    #   2. Distribute the remaining page width proportionally to body
+    #      content length, so columns with long values get more breathing
+    #      room without ever shrinking below their min width.
+    H_PAD = 14                          # left + right cell padding
+    page_w_pt = page[0] - 2.4*cm        # available width after page margins
+
+    # Sample at most ~80 rows to estimate body widths (faster, accurate enough)
+    sample = df.head(80)
+
+    min_widths = []
+    body_lens  = []
     for c in df.columns:
-        header_chars = max(len(w) for w in str(c).split()) if str(c).strip() else 4
-        body_chars   = sample[c].astype(str).map(len).max() if c in sample.columns else 4
+        col_str = str(c)
+        # (a) widest single word in header (incl. unbreakable tokens like "MTD")
+        words = col_str.split() or [col_str]
+        max_word_pt = max(
+            pdfmetrics.stringWidth(w, "Helvetica-Bold", 18) for w in words
+        )
+        # (b) widest body value
         try:
-            body_chars = int(body_chars) if pd.notna(body_chars) else 4
+            body_strs = sample[c].astype(str).tolist() if c in sample.columns else [""]
         except Exception:
-            body_chars = 4
-        col_lens.append(max(8, header_chars, body_chars))
-    total_len = sum(col_lens)
-    col_widths = [page_w_pt * L / total_len for L in col_lens]
+            body_strs = [""]
+        if not body_strs:
+            body_strs = [""]
+        max_body_pt = max(
+            pdfmetrics.stringWidth(s, "Helvetica", 18) for s in body_strs
+        ) if body_strs else 0
+
+        min_w = max(max_word_pt, max_body_pt) + H_PAD
+        min_widths.append(min_w)
+
+        # proportional weight = average body length (chars), floor of 4
+        try:
+            avg_chars = sample[c].astype(str).map(len).mean() if c in sample.columns else 4
+            avg_chars = float(avg_chars) if pd.notna(avg_chars) else 4.0
+        except Exception:
+            avg_chars = 4.0
+        body_lens.append(max(4.0, avg_chars))
+
+    total_min = sum(min_widths)
+    if total_min >= page_w_pt:
+        # Min widths already fill (or overflow) the page — just use them.
+        # The page-size heuristic above should have given us enough room,
+        # but this branch keeps things safe for unusually wide content.
+        col_widths = min_widths
+    else:
+        # Distribute the remaining width proportional to body length
+        slack = page_w_pt - total_min
+        weight_total = sum(body_lens)
+        col_widths = [
+            mw + slack * (bl / weight_total)
+            for mw, bl in zip(min_widths, body_lens)
+        ]
 
     tbl = Table(data, colWidths=col_widths, repeatRows=1)
     tbl.setStyle(TableStyle([
         # Pure white background everywhere
         ("BACKGROUND",     (0, 0), (-1, -1), colors.white),
         ("TEXTCOLOR",      (0, 0), (-1, -1), colors.black),
-        # Alignment
+        # Alignment — header row vertically centred so multi-line headers
+        # sit nicely no matter how tall the row gets.
         ("ALIGN",          (0, 0), (-1, -1), "CENTER"),
         ("VALIGN",         (0, 0), (-1, -1), "MIDDLE"),
         # Borders only — full grid in solid black, slightly heavier under header
         ("GRID",           (0, 0), (-1, -1), 0.7, colors.black),
         ("LINEBELOW",      (0, 0), (-1,  0), 1.6, colors.black),
-        # Padding so 18pt text doesn't crowd the borders
-        ("BOTTOMPADDING",  (0, 0), (-1, -1), 8),
-        ("TOPPADDING",     (0, 0), (-1, -1), 8),
-        ("LEFTPADDING",    (0, 0), (-1, -1), 4),
-        ("RIGHTPADDING",   (0, 0), (-1, -1), 4),
+        # Extra-generous padding on the header row so multi-line headers
+        # have room to breathe — the row will auto-grow to fit.
+        ("TOPPADDING",     (0, 0), (-1,  0), 12),
+        ("BOTTOMPADDING",  (0, 0), (-1,  0), 12),
+        # Body rows — normal padding
+        ("TOPPADDING",     (0, 1), (-1, -1), 8),
+        ("BOTTOMPADDING",  (0, 1), (-1, -1), 8),
+        ("LEFTPADDING",    (0, 0), (-1, -1), 6),
+        ("RIGHTPADDING",   (0, 0), (-1, -1), 6),
     ]))
     elements.append(tbl)
 
@@ -2305,34 +2363,76 @@ def dashboard_page():
     # Diagnostics panel — open automatically when MTD is 0
     render_diagnostics(df)
 
-    tab_summary, tab_drill, tab_detailed = st.tabs([
-        "📊 Summary Dashboard",
-        "🔍 Drill-Down (Day × Store)",
-        "📋 Detailed View",
-    ])
+    # ── Compute everything once, BEFORE laying out tabs ─────────────────────
+    # The Detailed View is the default landing surface, so it must always
+    # have access to filters and metrics — even when the other two tabs are
+    # hidden. We therefore lift these computations out of `tab_summary`.
+    metrics_all = calculate_metrics(df)
+    dd_all      = calculate_drilldown(df)
+    filters     = render_sidebar(df, metrics_all, dd_all)
 
-    with tab_summary:
-        metrics_all = calculate_metrics(df)
-        dd_all      = calculate_drilldown(df)
-        filters     = render_sidebar(df, metrics_all, dd_all)
+    filtered = apply_filters(df, filters)
+    if filtered.empty:
+        st.warning("No rows match the current filters.")
+        return
 
-        filtered = apply_filters(df, filters)
-        if filtered.empty:
-            st.warning("No rows match the current filters.")
-            return
+    rep_month = filters.get("reporting_month", "All")
+    if rep_month and rep_month != "All":
+        mtd_label = rep_month
+    elif filters.get("enroll_months"):
+        mtd_label = filters["enroll_months"][-1]
+    else:
+        cur = _latest_period(filtered)
+        mtd_label = cur.strftime("%b-%y") if cur else "—"
 
-        rep_month = filters.get("reporting_month", "All")
-        if rep_month and rep_month != "All":
-            mtd_label = rep_month
-        elif filters.get("enroll_months"):
-            mtd_label = filters["enroll_months"][-1]
+    metrics = calculate_metrics(filtered, mtd_month_label=mtd_label)
+    dd_df   = calculate_drilldown(filtered, mtd_month_label=mtd_label)
+
+    # ── Tab visibility toggle (Summary + Drill-Down hidden by default) ──────
+    if "show_advanced_tabs" not in st.session_state:
+        st.session_state.show_advanced_tabs = False
+    show_advanced = st.session_state.show_advanced_tabs
+
+    btn_col1, btn_col2 = st.columns([3, 1])
+    with btn_col2:
+        if show_advanced:
+            if st.button("🙈 Hide Summary & Drill-Down",
+                         use_container_width=True, key="toggle_adv_tabs_off"):
+                st.session_state.show_advanced_tabs = False
+                st.rerun()
         else:
-            cur = _latest_period(filtered)
-            mtd_label = cur.strftime("%b-%y") if cur else "—"
+            if st.button("👁️ Show Summary & Drill-Down",
+                         use_container_width=True, key="toggle_adv_tabs_on",
+                         type="primary"):
+                st.session_state.show_advanced_tabs = True
+                st.rerun()
 
-        metrics = calculate_metrics(filtered, mtd_month_label=mtd_label)
-        dd_df   = calculate_drilldown(filtered, mtd_month_label=mtd_label)
+    # ── Render Detailed View body ───────────────────────────────────────────
+    def _render_detailed_view_body():
+        section("Detailed View – Store Director × Member Performance", "📋")
+        st.markdown("""
+        This view follows the **new reporting format** with one row per store.
+        Columns: Store Director Name (auto-populated), ASM Name, MTD totals
+        for customers, members and non-members, plus same-day enrollment
+        rates.
+        """)
 
+        detailed_df = calculate_detailed_view(filtered, metrics)
+
+        # Optional store filter, mirroring the drill-down tab UX
+        if not detailed_df.empty and "Store Name" in detailed_df.columns:
+            stores_dv = sorted(detailed_df["Store Name"].dropna().unique().tolist())
+            sel_dv = st.multiselect("Filter by Store (Detailed View only)",
+                                    ["All"] + stores_dv, default=["All"],
+                                    key="dv_store_filter")
+            if sel_dv and "All" not in sel_dv:
+                detailed_df = detailed_df[detailed_df["Store Name"].isin(sel_dv)]
+
+        st.caption(f"Showing **{len(detailed_df):,}** stores")
+        render_detailed_view_table(detailed_df)
+
+    # ── Render Summary body ─────────────────────────────────────────────────
+    def _render_summary_body():
         section("Executive Summary", "📌")
         render_kpis(metrics, filtered, mtd_label)
 
@@ -2351,7 +2451,8 @@ def dashboard_page():
         )
         render_table(metrics)
 
-    with tab_drill:
+    # ── Render Drill-Down body ──────────────────────────────────────────────
+    def _render_drilldown_body():
         section("Day-wise × Store-wise Drill-Down", "🔍")
         st.markdown("""
         This table shows **day-wise** and **store-wise** breakdown of:
@@ -2359,12 +2460,7 @@ def dashboard_page():
         and Bills >₹2K / ≤₹2K (non-MSR bills only).
         """)
 
-        try:
-            filtered_drill = filtered
-            dd_df_display  = dd_df
-        except NameError:
-            filtered_drill = df
-            dd_df_display  = calculate_drilldown(df)
+        dd_df_display = dd_df
 
         stores_available = sorted(dd_df_display["Store Code"].dropna().unique().tolist()) \
             if not dd_df_display.empty and "Store Code" in dd_df_display.columns else []
@@ -2392,40 +2488,21 @@ def dashboard_page():
             except Exception as e:
                 st.caption(f"Excel unavailable: {e}")
 
-    # ── NEW: Detailed View tab — matches the new-format CSV layout ──────────
-    with tab_detailed:
-        section("Detailed View – Store Director × Member Performance", "📋")
-        st.markdown("""
-        This view follows the **new reporting format** with one row per store.
-        Columns: Store Director Name (auto-populated), ASM Name, MTD totals
-        for customers, members and non-members, plus same-day enrollment
-        rates.
-        """)
-
-        # Reuse the same filtered data and metrics computed in the Summary tab.
-        # If for any reason they were not produced (e.g. user landed straight
-        # on the Detailed tab and apply_filters wiped the dataset), fall back
-        # to the unfiltered raw data.
-        try:
-            base_filtered = filtered
-            base_metrics  = metrics
-        except NameError:
-            base_filtered = df
-            base_metrics  = calculate_metrics(df)
-
-        detailed_df = calculate_detailed_view(base_filtered, base_metrics)
-
-        # Optional store filter, mirroring the drill-down tab UX
-        if not detailed_df.empty and "Store Name" in detailed_df.columns:
-            stores_dv = sorted(detailed_df["Store Name"].dropna().unique().tolist())
-            sel_dv = st.multiselect("Filter by Store (Detailed View only)",
-                                    ["All"] + stores_dv, default=["All"],
-                                    key="dv_store_filter")
-            if sel_dv and "All" not in sel_dv:
-                detailed_df = detailed_df[detailed_df["Store Name"].isin(sel_dv)]
-
-        st.caption(f"Showing **{len(detailed_df):,}** stores")
-        render_detailed_view_table(detailed_df)
+    # ── Layout: tabs only when advanced view is on, otherwise plain page ────
+    if show_advanced:
+        tab_summary, tab_drill, tab_detailed = st.tabs([
+            "📊 Summary Dashboard",
+            "🔍 Drill-Down (Day × Store)",
+            "📋 Detailed View",
+        ])
+        with tab_summary:
+            _render_summary_body()
+        with tab_drill:
+            _render_drilldown_body()
+        with tab_detailed:
+            _render_detailed_view_body()
+    else:
+        _render_detailed_view_body()
 
 # ────────────────────────────────────────────────────────────────────────────
 # Viewer-only "no data yet" page

@@ -1,8 +1,8 @@
 """
-MySpencers Rewards (MSR) Dashboard — Dark Edition
-==================================================
+MySpencers Rewards (MSR) Dashboard — Spencer's Red & White Edition
+==================================================================
 Features:
-  - Dark mode only (high-contrast, clearly-visible labels)
+  - Light mode only — Spencer's Retail red & white theme
   - Public viewer mode — anyone with the Streamlit URL can see the insights
   - **Admin authentication** (see auth.py) — only signed-in admins can
     upload new CSVs and manage the data table
@@ -70,26 +70,27 @@ st.set_page_config(
 )
 
 # ────────────────────────────────────────────────────────────────────────────
-# Dark-mode-only CSS — force every surface, label & input to be visible
+# Light-mode CSS — Spencer's Retail Red & White theme (matches AMS Migration)
 # ────────────────────────────────────────────────────────────────────────────
 CUSTOM_CSS = """
 <style>
     :root {
-        --bg:         #0a0e1a;
-        --bg-elev:    #111827;
-        --bg-card:    #1a2233;
-        --bg-input:   #0f1524;
-        --border:     #2a3447;
-        --border-lt:  #3a4660;
-        --text:       #e8eef5;
-        --text-mut:   #a6b4c8;
-        --text-dim:   #7689a3;
-        --gold:       #D4A017;
-        --gold-lt:    #f5c646;
-        --blue:       #4a8fe0;
-        --blue-dk:    #1C4B82;
-        --green:      #2A9D8F;
-        --red:        #E76F51;
+        --bg:         #ffffff;
+        --bg-elev:    #fafafa;
+        --bg-card:    #ffffff;
+        --bg-input:   #ffffff;
+        --bg-soft:    #fff5f5;
+        --border:     #e6e6e6;
+        --border-lt:  #d0d0d0;
+        --text:       #1a1a1a;
+        --text-mut:   #4a4a4a;
+        --text-dim:   #7a7a7a;
+        --red:        #C8102E;
+        --red-dk:     #9e0c24;
+        --red-lt:     #ec1c3c;
+        --red-soft:   #fde8ec;
+        --green:      #2e7d32;
+        --amber:      #c77700;
     }
 
     /* ── Global surfaces ───────────────────────────────────────────── */
@@ -121,15 +122,15 @@ CUSTOM_CSS = """
         color: var(--text-mut) !important;
     }
     code {
-        background: var(--bg-elev) !important;
-        color: var(--gold-lt) !important;
+        background: var(--red-soft) !important;
+        color: var(--red-dk) !important;
         padding: 2px 6px;
         border-radius: 4px;
     }
 
     /* ── Sidebar ───────────────────────────────────────────────────── */
     section[data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #0e1526 0%, #0a0e1a 100%) !important;
+        background: #ffffff !important;
         border-right: 1px solid var(--border);
     }
     section[data-testid="stSidebar"] *,
@@ -142,7 +143,7 @@ CUSTOM_CSS = """
     section[data-testid="stSidebar"] .stMarkdown h1,
     section[data-testid="stSidebar"] .stMarkdown h2,
     section[data-testid="stSidebar"] .stMarkdown h3 {
-        color: var(--gold-lt) !important;
+        color: var(--red) !important;
         font-weight: 700 !important;
         margin-top: 1.1rem;
         margin-bottom: .4rem;
@@ -155,7 +156,7 @@ CUSTOM_CSS = """
         margin: .8rem 0;
     }
 
-    /* ── Form inputs (universal dark) ──────────────────────────────── */
+    /* ── Form inputs (universal light) ─────────────────────────────── */
     input, textarea, select,
     [data-baseweb="input"] > div,
     [data-baseweb="select"] > div,
@@ -177,40 +178,40 @@ CUSTOM_CSS = """
 
     /* multiselect pills */
     [data-baseweb="tag"] {
-        background: var(--blue) !important;
+        background: var(--red) !important;
         color: #fff !important;
         border-radius: 6px !important;
     }
     /* dropdown menu (popover) */
     [data-baseweb="popover"], [role="listbox"] {
-        background: var(--bg-card) !important;
+        background: #ffffff !important;
         border: 1px solid var(--border-lt) !important;
     }
     [role="option"] {
         color: var(--text) !important;
     }
     [role="option"]:hover {
-        background: var(--bg-elev) !important;
+        background: var(--red-soft) !important;
     }
 
     /* File uploader */
     [data-testid="stFileUploader"] {
-        background: var(--bg-card) !important;
-        border: 1.5px dashed var(--border-lt) !important;
+        background: var(--bg-elev) !important;
+        border: 1.5px dashed var(--red-lt) !important;
         border-radius: 12px !important;
         padding: 1rem !important;
     }
     [data-testid="stFileUploader"] * { color: var(--text) !important; }
     [data-testid="stFileUploaderDropzone"] {
-        background: var(--bg-elev) !important;
-        border-color: var(--border-lt) !important;
+        background: #ffffff !important;
+        border-color: var(--red-lt) !important;
     }
 
     /* ── Buttons ───────────────────────────────────────────────────── */
     .stButton > button {
-        background: linear-gradient(135deg, var(--blue) 0%, var(--blue-dk) 100%) !important;
+        background: linear-gradient(135deg, var(--red) 0%, var(--red-dk) 100%) !important;
         color: #fff !important;
-        border: 1px solid rgba(255,255,255,.08) !important;
+        border: 1px solid var(--red-dk) !important;
         border-radius: 8px !important;
         padding: .55rem 1.1rem !important;
         font-weight: 600 !important;
@@ -218,38 +219,40 @@ CUSTOM_CSS = """
     }
     .stButton > button:hover {
         transform: translateY(-1px);
-        box-shadow: 0 8px 18px rgba(74,143,224,.35);
+        box-shadow: 0 8px 18px rgba(200,16,46,.28);
+        background: linear-gradient(135deg, var(--red-lt) 0%, var(--red) 100%) !important;
     }
     .stButton > button:disabled {
-        background: var(--bg-elev) !important;
+        background: #e8e8e8 !important;
         color: var(--text-dim) !important;
+        border-color: var(--border-lt) !important;
         cursor: not-allowed !important;
     }
     .stDownloadButton > button {
-        background: var(--bg-card) !important;
-        color: var(--gold-lt) !important;
-        border: 1.5px solid var(--gold) !important;
+        background: #ffffff !important;
+        color: var(--red) !important;
+        border: 1.5px solid var(--red) !important;
         border-radius: 8px !important;
         font-weight: 600 !important;
         width: 100% !important;
     }
     .stDownloadButton > button:hover {
-        background: var(--gold) !important;
-        color: #1a1100 !important;
+        background: var(--red) !important;
+        color: #fff !important;
     }
 
     /* ── Hero banner ───────────────────────────────────────────────── */
     .hero {
-        background: linear-gradient(135deg, #13315C 0%, #1C4B82 55%, #0B2545 100%);
+        background: linear-gradient(135deg, #C8102E 0%, #9e0c24 100%);
         color: #fff; padding: 1.5rem 1.9rem; border-radius: 14px;
         margin-bottom: 1.2rem; border: 1px solid rgba(255,255,255,.08);
-        box-shadow: 0 12px 36px rgba(0,0,0,.55);
+        box-shadow: 0 8px 24px rgba(200,16,46,.18);
         display: flex; align-items: center; justify-content: space-between;
     }
     .hero h1 { margin:0; font-size:1.65rem; font-weight:700; letter-spacing:-0.5px; color:#fff; }
-    .hero .tag { font-size:0.88rem; opacity:0.88; margin-top:0.25rem; color:#d9e3f2; }
+    .hero .tag { font-size:0.88rem; opacity:0.92; margin-top:0.25rem; color:#fff5f5; }
     .hero .badge {
-        background: rgba(255,255,255,0.12); border:1px solid rgba(255,255,255,0.22);
+        background: rgba(255,255,255,0.18); border:1px solid rgba(255,255,255,0.32);
         padding: 0.4rem 0.9rem; border-radius:999px; font-size:0.78rem; font-weight:500;
         color:#fff;
     }
@@ -261,11 +264,12 @@ CUSTOM_CSS = """
         border-radius: 14px; padding: 1.15rem 1.25rem;
         transition: transform .18s ease, box-shadow .18s ease;
         height: 100%;
+        box-shadow: 0 1px 3px rgba(0,0,0,.04);
     }
     .kpi-card:hover {
         transform: translateY(-2px);
-        box-shadow: 0 10px 26px rgba(0,0,0,.5);
-        border-color: var(--border-lt);
+        box-shadow: 0 8px 22px rgba(200,16,46,.10);
+        border-color: var(--red-lt);
     }
     .kpi-label {
         font-size:.76rem; text-transform:uppercase; letter-spacing:1.2px;
@@ -273,21 +277,21 @@ CUSTOM_CSS = """
     }
     .kpi-value { font-size:1.95rem; font-weight:800; color:var(--text); line-height:1.1; }
     .kpi-sub   { font-size:.78rem; color:var(--text-dim); margin-top:.4rem; }
-    .kpi-accent-blue  { border-top:4px solid var(--blue); }
-    .kpi-accent-gold  { border-top:4px solid var(--gold); }
+    .kpi-accent-blue  { border-top:4px solid var(--red); }
+    .kpi-accent-gold  { border-top:4px solid #1a1a1a; }
     .kpi-accent-green { border-top:4px solid var(--green); }
     .kpi-accent-red   { border-top:4px solid var(--red); }
 
     /* ── Section titles ────────────────────────────────────────────── */
     .section-title {
-        font-size:1.08rem; font-weight:700; color:var(--gold-lt);
+        font-size:1.08rem; font-weight:700; color:var(--red);
         margin:1.6rem 0 .75rem 0; padding-bottom:.45rem;
         border-bottom: 1px solid var(--border); display:flex; align-items:center; gap:.55rem;
     }
     .section-title .dot {
         width:9px; height:9px; border-radius:50%;
-        background: linear-gradient(135deg, var(--gold), var(--gold-lt));
-        box-shadow: 0 0 8px rgba(212,160,23,.6);
+        background: var(--red);
+        box-shadow: 0 0 6px rgba(200,16,46,.4);
     }
 
     /* ── Tabs ──────────────────────────────────────────────────────── */
@@ -304,14 +308,14 @@ CUSTOM_CSS = """
         padding: .55rem 1rem !important;
     }
     .stTabs [aria-selected="true"] {
-        color: var(--gold-lt) !important;
-        border-bottom: 2px solid var(--gold) !important;
+        color: var(--red) !important;
+        border-bottom: 2px solid var(--red) !important;
     }
 
     /* ── DataFrame ─────────────────────────────────────────────────── */
     [data-testid="stDataFrame"],
     [data-testid="stDataFrameResizable"] {
-        background: var(--bg-card) !important;
+        background: #ffffff !important;
         border: 1px solid var(--border) !important;
         border-radius: 10px !important;
     }
@@ -321,7 +325,7 @@ CUSTOM_CSS = """
 
     /* Alerts / info / warning / success / error boxes */
     [data-testid="stAlert"] {
-        background: var(--bg-card) !important;
+        background: var(--bg-elev) !important;
         border: 1px solid var(--border-lt) !important;
         border-radius: 10px !important;
     }
@@ -333,11 +337,11 @@ CUSTOM_CSS = """
         border: 1px solid var(--border) !important;
         border-radius: 10px !important;
     }
-    [data-testid="stExpander"] summary { color: var(--gold-lt) !important; font-weight: 600 !important; }
+    [data-testid="stExpander"] summary { color: var(--red) !important; font-weight: 600 !important; }
 
     /* Plotly container */
     [data-testid="stPlotlyChart"] {
-        background: var(--bg-card) !important;
+        background: #ffffff !important;
         border: 1px solid var(--border) !important;
         border-radius: 10px !important;
         padding: .3rem !important;
@@ -354,26 +358,24 @@ CUSTOM_CSS = """
     }
 
     /* ── Sidebar collapse/expand controls — make them obvious ─────── */
-    /* Arrow shown INSIDE the open sidebar to collapse it */
     [data-testid="stSidebarCollapseButton"],
     [data-testid="stSidebarCollapseButton"] button,
     button[kind="headerNoPadding"] {
         visibility: visible !important;
         display: inline-flex !important;
-        background: var(--bg-card) !important;
-        color: var(--gold-lt) !important;
+        background: #ffffff !important;
+        color: var(--red) !important;
         border: 1px solid var(--border-lt) !important;
         border-radius: 6px !important;
         opacity: 1 !important;
     }
     [data-testid="stSidebarCollapseButton"] svg,
     [data-testid="collapsedControl"] svg {
-        color: var(--gold-lt) !important;
-        fill: var(--gold-lt) !important;
+        color: var(--red) !important;
+        fill: var(--red) !important;
     }
 
-    /* Floating pill shown when the sidebar IS collapsed — this is the
-       button that was getting hidden. Force it visible + prominent. */
+    /* Floating pill shown when the sidebar IS collapsed */
     [data-testid="collapsedControl"] {
         visibility: visible !important;
         display: block !important;
@@ -381,43 +383,156 @@ CUSTOM_CSS = """
         top: .9rem !important;
         left: .9rem !important;
         z-index: 999999 !important;
-        background: linear-gradient(135deg, var(--blue) 0%, var(--blue-dk) 100%) !important;
-        border: 1px solid var(--gold) !important;
+        background: linear-gradient(135deg, var(--red) 0%, var(--red-dk) 100%) !important;
+        border: 1px solid var(--red-dk) !important;
         border-radius: 8px !important;
         padding: .35rem .55rem !important;
-        box-shadow: 0 6px 16px rgba(0,0,0,.55) !important;
+        box-shadow: 0 6px 16px rgba(200,16,46,.32) !important;
     }
     [data-testid="collapsedControl"] button {
         background: transparent !important;
         color: #fff !important;
     }
+    [data-testid="collapsedControl"] svg {
+        color: #fff !important;
+        fill: #fff !important;
+    }
     [data-testid="collapsedControl"]:hover {
         transform: translateY(-1px);
-        box-shadow: 0 10px 22px rgba(74,143,224,.45) !important;
+        box-shadow: 0 10px 22px rgba(200,16,46,.40) !important;
     }
 
     /* Scrollbar (webkit) */
     ::-webkit-scrollbar { width: 10px; height: 10px; }
-    ::-webkit-scrollbar-track { background: var(--bg); }
+    ::-webkit-scrollbar-track { background: #f5f5f5; }
     ::-webkit-scrollbar-thumb { background: var(--border-lt); border-radius: 5px; }
-    ::-webkit-scrollbar-thumb:hover { background: var(--blue); }
+    ::-webkit-scrollbar-thumb:hover { background: var(--red); }
 </style>
 """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
-# Palettes (dark-mode friendly)
+# Palettes (Spencer's red & white)
 PALETTE   = {
-    "navy":"#0B2545","blue":"#4a8fe0","gold":"#D4A017","gold_lt":"#f5c646",
-    "teal":"#2A9D8F","red":"#E76F51","grey":"#8A9BB4",
+    "navy":"#1a1a1a","blue":"#C8102E","gold":"#1a1a1a","gold_lt":"#9e0c24",
+    "teal":"#2e7d32","red":"#C8102E","grey":"#8A8A8A",
 }
-SEQ_BLUE  = ["#1e3558","#27466f","#305787","#3a699e","#4a7db5","#6194cc","#7badde","#9bc6ec"]
-SEQ_GOLD  = ["#3a2a07","#5c430b","#825d0f","#a87c0a","#D4A017","#e2b93a","#f1cd62","#f9dd8a"]
+SEQ_RED   = ["#fde8ec","#f9c0c8","#f198a4","#e96f80","#df4357","#C8102E","#9e0c24","#700718"]
+SEQ_BLUE  = SEQ_RED  # alias for chart code that references SEQ_BLUE
+SEQ_GOLD  = ["#cccccc","#b3b3b3","#999999","#808080","#666666","#4d4d4d","#333333","#1a1a1a"]
 
 REQUIRED_COLS = [
     "store_code","store_name","mobile_number","bill_no",
     "grs_sales","msr_number","msr_month","noc_tagging","msr_tagging","asm_name",
 ]
 DATE_COLS = ["calendar_day","month_name"]
+
+# ────────────────────────────────────────────────────────────────────────────
+# Store Director directory (sourced from store_director.csv)
+# Maps Store Code → Store Director Name. Used by the Detailed View tab so the
+# director column auto-populates. Codes are matched case-insensitively and
+# trimmed of whitespace before lookup. Trailing spaces in names from the
+# source CSV are preserved exactly as supplied.
+# ────────────────────────────────────────────────────────────────────────────
+STORE_DIRECTORS: dict[str, str] = {
+    "D070": "Raju Ghosh",
+    "D087": "Bikash Bhagat",
+    "D089": "Jayanta Karmakar",
+    "D104": "Chinmay Mondal",
+    "D166": "Swapan Sen",
+    "D202": "Partha Sarathi Banerjee",
+    "D263": "Shoaib Ahmad",
+    "D265": "Krishneshwar Kumar Tiwari",
+    "D266": "Shadab Ahmad",
+    "D269": "Shankar Sah",
+    "D270": "Sagar Chaturvedi",
+    "D278": "Vinay Tiwari",
+    "D333": "Karuna Shanker",
+    "D345": "Ajay Kumar",
+    "D346": "Amar Srivastava",
+    "D354": "Sanju Medda",
+    "D357": "Tariq Mahmood",
+    "D359": "Bankin Mondal",
+    "D360": "Karuna Shanker",
+    "D362": "Shivam Singh (TL-Temprory)",
+    "D365": "Amit Bhuiya",
+    "D371": "Mahadeb Das",
+    "D374": "Suman Dutta",
+    "D375": "Rajesh Mistry",
+    "D378": "Sandip Sikdar",
+    "D379": "Sanjoy Rajbanshi",
+    "D386": "Neeraj Kumar Dwivedi",
+    "D388": "Suman Das",
+    "D390": "Km Sonia",
+    "D391": "Loknath Mondal(Dm)",
+    "D394": "Bheem Singh",
+    "D400": "Rajkumar Banerjee",
+    "D410": "Priyanka Chatterjee",
+    "D418": "Sardha Pradhan",
+    "H009": "Sachidanand Prasad",
+    "H012": "Rohit Karmakar",
+    "H013": "Somnath Singha",
+    "H030": "Jitendra Kumar Yadav",
+    "H042": "Prabuna Chhetri",
+    "H048": "Virendra Yadav",
+    "H049": "Md Noor Asif",
+    "H069": "Debojit Roy Bardhan",
+    "H072": "Biswanath Mukherjee",
+    "H081": "Arindam Chakraborty",
+    "H090": "Amit Shaw",
+    "H100": "Sandeep Sharma",
+    "H104": "Ramakrishna",
+    "H115": "Imon Dutta",
+    "H126": "Jitendra Rajput",
+    "H129": "Jai Kanojia",
+    "H139": "Bimalendu Das",
+    "H143": "Sumit Sharma",
+    "M053": "Trisha",
+    "S004": "Sarwar Hussain",
+    "S040": "Vyas Mani Pandey",
+    "S041": "Asit Senapati",
+    "S046": "Sailen Chakraborty",
+    "S053": "Shiv Kumar Upadhyay",
+    "S055": "Satyendra Kumar",
+    "S056": "Biswajit Roy",
+    "S059": "Kuntal Das",
+    "S060": "Sk Aktar Hossain",
+    "S062": "Atanu Sarkar",
+    "S064": "Tirtha Sen",
+    "S065": "Bibhas Das",
+    "S066": "Bapi Bose",
+    "S070": "Surendra Nath Dey",
+    "S077": "Arup Manna",
+    "S080": "Subhendu Ghosh",
+    "S083": "Amod Kumar",
+    "S085": "Subhajit Palit",
+    "S088": "Rajesh Kumar Dubey",
+    "S089": "Uttam Chaubey",
+    "S090": "Rajib Ghosh",
+    "S091": "Santosh Patel",
+    "S095": "Chandan Paul",
+    "S100": "Jhuma Sengupta",
+    "S106": "Vikram Kumar Singh",
+    "S110": "Ratnakar Dwivedi",
+    "S111": "Sudipta Das",
+    "S113": "Shyam Sundar Yadav",
+    "S117": "Mayur Dilipkumar Mudiraj",
+    "S119": "Purka Thapa",
+    "S120": "Shisir Dhar",
+    "S121": "Mohd Anees",
+    "V010": "Harishanker Patel",
+    "X011": "Salma Khatun",
+    "X015": "Anowar Khan",
+    "X017": "Dipankar Purkait",
+    "X019": "Shyamal Halder",
+}
+
+
+def lookup_store_director(store_code: str) -> str:
+    """Return the Store Director name for a given store code, or '-' if unknown."""
+    if store_code is None:
+        return "-"
+    key = str(store_code).strip().upper()
+    return STORE_DIRECTORS.get(key, "-")
 
 # ────────────────────────────────────────────────────────────────────────────
 # 💾 Persistent storage (SQLite)
@@ -924,6 +1039,17 @@ def calculate_metrics(df: pd.DataFrame, mtd_month_label: Optional[str] = None) -
     else:
         last_day_enroll = pd.Series(dtype=int, name="Last Day Member Enrollment")
 
+    # NEW: Last Day Non Member Shopped — unique non-MSR customers on the
+    # last day. Required for the Detailed View tab.
+    if last_day_mask.any():
+        last_day_non_member = (
+            df[last_day_mask & ~df["is_msr"]]
+              .groupby(group_cols)["mobile_number"].nunique()
+              .rename("Last Day Non Member Shopped")
+        )
+    else:
+        last_day_non_member = pd.Series(dtype=int, name="Last Day Non Member Shopped")
+
     mtd        = df[mtd_mask].groupby(group_cols)["mobile_number"].nunique().rename("MTD Enrollment")
     msr_cnt    = df[df["is_msr"]].groupby(group_cols)["mobile_number"].nunique().rename("Unique MSR Members")
     non_msr    = df[~df["is_msr"]].groupby(group_cols)["mobile_number"].nunique().rename("Unique Non-MSR Members")
@@ -936,6 +1062,7 @@ def calculate_metrics(df: pd.DataFrame, mtd_month_label: Optional[str] = None) -
     nob_lt = _count_bills(lt_df, group_cols).rename("Bills ≤2K")
 
     metrics = (pd.concat([total_cust, last_day_noc, last_day_enroll,
+                          last_day_non_member,
                           mtd, msr_cnt, non_msr, nob_gt, nob_lt], axis=1)
                  .fillna(0).astype(int, errors="ignore").reset_index())
 
@@ -950,6 +1077,7 @@ def calculate_metrics(df: pd.DataFrame, mtd_month_label: Optional[str] = None) -
     metrics = metrics.rename(columns=rename)
     order = (list(rename.values()) +
              ["Total NOC", "Last Day NOC", "Last Day Member Enrollment",
+              "Last Day Non Member Shopped",
               "MTD Enrollment","Unique MSR Members","Unique Non-MSR Members",
               "Conversion %","Bills >2K","Bills ≤2K"])
     cols = [c for c in order if c in metrics.columns]
@@ -1001,6 +1129,75 @@ def calculate_drilldown(df: pd.DataFrame, mtd_month_label: Optional[str] = None)
              "Unique Non-MSR Members","Conversion %","Bills >2K","Bills ≤2K"]
     cols = [c for c in order if c in dd.columns]
     return dd[cols].sort_values(["Day","Store Code"], ascending=[False, True])
+
+
+@st.cache_data(show_spinner=False)
+def calculate_detailed_view(df: pd.DataFrame,
+                             metrics_df: pd.DataFrame) -> pd.DataFrame:
+    """Build the 'Detailed View' table that mirrors the new-format CSV.
+
+    Columns produced (in order):
+      Store Name · Store Director Name · ASM Name ·
+      TTL MTD Customer · Last Day Non Member Shopped ·
+      Last Day member Enrollment · Last Day Enrollment % ·
+      MTD Non Member Shopped · MTD member Enrollment · MTD member Enrollment %
+    """
+    if df.empty or metrics_df is None or metrics_df.empty:
+        return pd.DataFrame(columns=[
+            "Store Name", "Store Director Name", "ASM Name",
+            "TTL MTD Customer", "Last Day Non Member Shopped",
+            "Last Day member Enrollment", "Last Day Enrollment %",
+            "MTD Non Member Shopped", "MTD member Enrollment",
+            "MTD member Enrollment %",
+        ])
+
+    m = metrics_df.copy()
+
+    # Defensive: ensure every column we need exists, default to 0
+    for col in ["Total NOC", "Last Day NOC", "Last Day Member Enrollment",
+                "Last Day Non Member Shopped", "MTD Enrollment",
+                "Unique Non-MSR Members"]:
+        if col not in m.columns:
+            m[col] = 0
+
+    # Last Day Enrollment % = Last Day Member Enrollment / Last Day NOC × 100
+    last_day_total = m["Last Day NOC"].astype(float)
+    m["Last Day Enrollment %"] = np.where(
+        last_day_total > 0,
+        (m["Last Day Member Enrollment"].astype(float) / last_day_total * 100).round(2),
+        0.0,
+    )
+
+    # MTD Enrollment % = MTD Enrollment / Total NOC × 100
+    mtd_total = m["Total NOC"].astype(float)
+    m["MTD member Enrollment %"] = np.where(
+        mtd_total > 0,
+        (m["MTD Enrollment"].astype(float) / mtd_total * 100).round(2),
+        0.0,
+    )
+
+    # Pull the Store Director name from the lookup
+    if "Store Code" in m.columns:
+        m["Store Director Name"] = m["Store Code"].apply(lookup_store_director)
+    else:
+        m["Store Director Name"] = "-"
+
+    # Final shape — match the new-format CSV exactly
+    detailed = pd.DataFrame({
+        "Store Name"                : m["Store Name"]                if "Store Name" in m.columns else "",
+        "Store Director Name"       : m["Store Director Name"],
+        "ASM Name"                  : m["ASM Name"]                  if "ASM Name"   in m.columns else "",
+        "TTL MTD Customer"          : m["Total NOC"].astype(int),
+        "Last Day Non Member Shopped": m["Last Day Non Member Shopped"].astype(int),
+        "Last Day member Enrollment": m["Last Day Member Enrollment"].astype(int),
+        "Last Day Enrollment %"     : m["Last Day Enrollment %"],
+        "MTD Non Member Shopped"    : m["Unique Non-MSR Members"].astype(int),
+        "MTD member Enrollment"     : m["MTD Enrollment"].astype(int),
+        "MTD member Enrollment %"   : m["MTD member Enrollment %"],
+    })
+
+    return detailed.sort_values("TTL MTD Customer", ascending=False).reset_index(drop=True)
+
 
 # ────────────────────────────────────────────────────────────────────────────
 # Filters
@@ -1059,12 +1256,27 @@ def to_excel_bytes(df: pd.DataFrame, sheet_name: str = "MSR Metrics") -> bytes:
 
 
 def to_pdf_bytes(df: pd.DataFrame, title: str = "MSR Report") -> bytes:
-    """Generate a styled PDF table from a DataFrame using reportlab."""
+    """Generate a clean white-background PDF table from a DataFrame.
+
+    Design rules (from product owner):
+      • Pure white background, black fonts, borders only — no shading, no
+        zebra rows, no dark theme colours.
+      • Body & header font size = 18 pt.
+      • ALL columns fit horizontally on ONE page; rows simply continue on
+        the next page when they run out of room.
+      • Headers wrap onto multiple lines so long labels (e.g.
+        'Last Day Non Member Shopped') no longer overlap each other.
+
+    To make every column fit at 18 pt the page size is chosen automatically
+    from the column count: A3 → A2 → A1 → A0 (all landscape). This avoids
+    the squashed/overlapping output of the previous implementation.
+    """
     try:
         from reportlab.lib import colors
-        from reportlab.lib.pagesizes import A3, landscape
-        from reportlab.lib.styles import getSampleStyleSheet
-        from reportlab.lib.units import cm
+        from reportlab.lib.pagesizes import A0, A1, A2, A3, A4, landscape
+        from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+        from reportlab.lib.enums import TA_CENTER
+        from reportlab.lib.units import cm, mm
         from reportlab.platypus import (Paragraph, SimpleDocTemplate,
                                         Spacer, Table, TableStyle)
     except ImportError:
@@ -1073,65 +1285,117 @@ def to_pdf_bytes(df: pd.DataFrame, title: str = "MSR Report") -> bytes:
             "Install: pip install reportlab"
         )
 
+    # ── Choose a page big enough to fit every column at 18pt ─────────────
+    # Heuristic: at 18pt, an average numeric cell needs ~2cm wide; a wrapped
+    # header needs ~3cm minimum. We size up the paper as columns grow.
+    n_cols = max(1, len(df.columns))
+    if   n_cols <= 6:   page = landscape(A3)   # ~42 × 30 cm
+    elif n_cols <= 9:   page = landscape(A2)   # ~59 × 42 cm
+    elif n_cols <= 13:  page = landscape(A1)   # ~84 × 59 cm
+    else:               page = landscape(A0)   # ~119 × 84 cm
+
     buf = io.BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=landscape(A3),
-                            leftMargin=1*cm, rightMargin=1*cm,
-                            topMargin=1.5*cm, bottomMargin=1.5*cm)
+    doc = SimpleDocTemplate(
+        buf, pagesize=page,
+        leftMargin=1.2*cm, rightMargin=1.2*cm,
+        topMargin=1.2*cm, bottomMargin=1.2*cm,
+    )
 
     styles = getSampleStyleSheet()
-    title_style = styles["Heading1"]
-    title_style.textColor = colors.HexColor("#D4A017")
-    title_style.fontSize = 14
-    title_style.spaceAfter = 10
 
-    elements = []
-    elements.append(Paragraph(f"Spencer's Retail — {title}", title_style))
-    from datetime import datetime as _dt
-    elements.append(Paragraph(
-        f"Generated: {_dt.now().strftime('%d-%m-%Y %H:%M')}  |  Rows: {len(df):,}",
-        styles["Normal"]
-    ))
-    elements.append(Spacer(1, 0.4*cm))
+    # ── Title & subtitle styles (dark text, no colour fills) ─────────────
+    title_style = ParagraphStyle(
+        "TitleStyle",
+        parent=styles["Heading1"],
+        textColor=colors.black,
+        fontName="Helvetica-Bold",
+        fontSize=22,
+        spaceAfter=4,
+    )
+    sub_style = ParagraphStyle(
+        "SubStyle",
+        parent=styles["Normal"],
+        textColor=colors.black,
+        fontName="Helvetica",
+        fontSize=11,
+        spaceAfter=10,
+    )
 
-    # Build table data
-    col_names = [str(c) for c in df.columns]
-    data = [col_names]
+    # ── Table-cell paragraph styles (font size 18, black, centred) ───────
+    header_para_style = ParagraphStyle(
+        "HeaderPara",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=18,
+        leading=22,            # generous line-height so wrapped text breathes
+        textColor=colors.black,
+        alignment=TA_CENTER,
+        wordWrap="CJK",        # break inside long words if absolutely needed
+    )
+    cell_para_style = ParagraphStyle(
+        "CellPara",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=18,
+        leading=22,
+        textColor=colors.black,
+        alignment=TA_CENTER,
+        wordWrap="CJK",
+    )
+
+    # ── Header / body content ────────────────────────────────────────────
+    elements = [
+        Paragraph(f"Spencer's Retail — {title}", title_style),
+        Paragraph(
+            f"Generated: {datetime.now().strftime('%d-%m-%Y %H:%M')}  |  "
+            f"Rows: {len(df):,}",
+            sub_style,
+        ),
+        Spacer(1, 0.25*cm),
+    ]
+
+    # Wrap every cell value in a Paragraph so reportlab can wrap text on
+    # whitespace — this is what stops headers from overlapping.
+    headers = [Paragraph(str(c), header_para_style) for c in df.columns]
+    data = [headers]
     for _, row in df.iterrows():
-        data.append([str(v) for v in row])
+        data.append([Paragraph(str(v) if pd.notna(v) else "", cell_para_style)
+                     for v in row])
 
-    # Compute column widths proportionally
-    page_w = landscape(A3)[0] - 2*cm
-    n_cols = len(col_names)
-    col_w  = page_w / n_cols
+    # ── Compute column widths proportionally to content length ───────────
+    page_w_pt = page[0] - 2.4*cm   # available width after margins
+    col_lens = []
+    sample = df.head(80)            # sample rows to estimate width
+    for c in df.columns:
+        header_chars = max(len(w) for w in str(c).split()) if str(c).strip() else 4
+        body_chars   = sample[c].astype(str).map(len).max() if c in sample.columns else 4
+        try:
+            body_chars = int(body_chars) if pd.notna(body_chars) else 4
+        except Exception:
+            body_chars = 4
+        col_lens.append(max(8, header_chars, body_chars))
+    total_len = sum(col_lens)
+    col_widths = [page_w_pt * L / total_len for L in col_lens]
 
-    tbl = Table(data, colWidths=[col_w] * n_cols, repeatRows=1)
+    tbl = Table(data, colWidths=col_widths, repeatRows=1)
     tbl.setStyle(TableStyle([
-        # Header
-        ("BACKGROUND",  (0, 0), (-1, 0), colors.HexColor("#0B2545")),
-        ("TEXTCOLOR",   (0, 0), (-1, 0), colors.HexColor("#f5c646")),
-        ("FONTNAME",    (0, 0), (-1, 0), "Helvetica-Bold"),
-        ("FONTSIZE",    (0, 0), (-1, 0), 7),
-        ("ALIGN",       (0, 0), (-1, 0), "CENTER"),
-        ("VALIGN",      (0, 0), (-1, 0), "MIDDLE"),
-        ("BOTTOMPADDING", (0, 0), (-1, 0), 6),
-        ("TOPPADDING",  (0, 0), (-1, 0), 6),
-        # Body
-        ("BACKGROUND",  (0, 1), (-1, -1), colors.HexColor("#1a2233")),
-        ("TEXTCOLOR",   (0, 1), (-1, -1), colors.HexColor("#e8eef5")),
-        ("FONTNAME",    (0, 1), (-1, -1), "Helvetica"),
-        ("FONTSIZE",    (0, 1), (-1, -1), 6.5),
-        ("ALIGN",       (0, 1), (-1, -1), "CENTER"),
-        ("VALIGN",      (0, 1), (-1, -1), "MIDDLE"),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -1),
-         [colors.HexColor("#1a2233"), colors.HexColor("#111827")]),
-        # Grid
-        ("GRID",        (0, 0), (-1, -1), 0.4, colors.HexColor("#2a3447")),
-        ("LINEBELOW",   (0, 0), (-1, 0), 1.2, colors.HexColor("#D4A017")),
-        # Padding
-        ("BOTTOMPADDING", (0, 1), (-1, -1), 4),
-        ("TOPPADDING",  (0, 1), (-1, -1), 4),
+        # Pure white background everywhere
+        ("BACKGROUND",     (0, 0), (-1, -1), colors.white),
+        ("TEXTCOLOR",      (0, 0), (-1, -1), colors.black),
+        # Alignment
+        ("ALIGN",          (0, 0), (-1, -1), "CENTER"),
+        ("VALIGN",         (0, 0), (-1, -1), "MIDDLE"),
+        # Borders only — full grid in solid black, slightly heavier under header
+        ("GRID",           (0, 0), (-1, -1), 0.7, colors.black),
+        ("LINEBELOW",      (0, 0), (-1,  0), 1.6, colors.black),
+        # Padding so 18pt text doesn't crowd the borders
+        ("BOTTOMPADDING",  (0, 0), (-1, -1), 8),
+        ("TOPPADDING",     (0, 0), (-1, -1), 8),
+        ("LEFTPADDING",    (0, 0), (-1, -1), 4),
+        ("RIGHTPADDING",   (0, 0), (-1, -1), 4),
     ]))
     elements.append(tbl)
+
     doc.build(elements)
     buf.seek(0)
     return buf.getvalue()
@@ -1212,7 +1476,7 @@ def render_diagnostics(df: pd.DataFrame):
     # Prominent banner if MTD is 0
     if mtd_rows == 0 and msr_rows > 0:
         st.markdown(
-            f"""<div style="background:#4a1a1f;border:1px solid #ff8b8b;color:#ffd4d4;
+            f"""<div style="background:#fde8ec;border:1px solid #C8102E;color:#9e0c24;
                   padding:.9rem 1.1rem;border-radius:10px;margin:.6rem 0 1rem 0;">
                   <b>⚠️ MTD Enrollment is 0.</b> Of {msr_rows:,} MSR rows,
                   {msr_rows_with_month:,} have a parseable <code>msr_month</code>
@@ -1291,26 +1555,27 @@ def color_conversion(val):
     except Exception:
         return ""
     if v >= 15:
-        return "background-color:#1e4430; color:#8ff0a8; font-weight:700"
+        return "background-color:#e7f5e9; color:#1e6b27; font-weight:700"
     elif v >= 8:
-        return "background-color:#4d3a0a; color:#ffd47a; font-weight:700"
+        return "background-color:#fff4d9; color:#8a5a00; font-weight:700"
     else:
-        return "background-color:#4a1a1f; color:#ff8b8b; font-weight:700"
+        return "background-color:#fde8ec; color:#9e0c24; font-weight:700"
 
 def style_metrics(df: pd.DataFrame):
     s = df.style
-    conv_col = next((c for c in df.columns if "Conversion" in c or "conversion" in c), None)
+    conv_col = next((c for c in df.columns if "Conversion" in c or "conversion" in c
+                     or "Enrollment %" in c), None)
     if conv_col:
         s = s.map(color_conversion, subset=[conv_col])
-    # overall dark styling for the styler
+    # overall light styling for the styler
     s = s.set_table_styles([
-        {"selector": "th", "props": [("background-color", "#111827"),
-                                      ("color", "#f5c646"),
+        {"selector": "th", "props": [("background-color", "#C8102E"),
+                                      ("color", "#ffffff"),
                                       ("font-weight", "700"),
-                                      ("border-color", "#2a3447")]},
-        {"selector": "td", "props": [("background-color", "#1a2233"),
-                                      ("color", "#e8eef5"),
-                                      ("border-color", "#2a3447")]},
+                                      ("border-color", "#9e0c24")]},
+        {"selector": "td", "props": [("background-color", "#ffffff"),
+                                      ("color", "#1a1a1a"),
+                                      ("border-color", "#e6e6e6")]},
     ])
     return s
 
@@ -1344,14 +1609,14 @@ def landing_page():
                               f"<b>{summary['min_date']}</b> → "
                               f"<b>{summary['max_date']}</b>")
             st.markdown(f"""
-            <div style="background:linear-gradient(135deg,#13315C 0%,#1C4B82 55%,#0B2545 100%);
+            <div style="background:linear-gradient(135deg,#C8102E 0%,#9e0c24 100%);
                         border:1px solid rgba(255,255,255,.12);
                         border-radius:14px;padding:1.1rem 1.3rem;margin-bottom:1rem;
                         color:#fff;">
-                <div style="font-size:.95rem;font-weight:700;color:#f5c646;margin-bottom:.3rem;">
+                <div style="font-size:.95rem;font-weight:700;color:#ffffff;margin-bottom:.3rem;">
                     💾 Persistent Storage Active
                 </div>
-                <div style="font-size:.88rem;color:#d9e3f2;line-height:1.6;">
+                <div style="font-size:.88rem;color:#fff5f5;line-height:1.6;">
                     <b>{summary['rows']:,}</b> rows already stored ·
                     <b>{summary['uploads']}</b> upload(s) in history ·
                     DB size: <b>{summary['db_size_kb']} KB</b>
@@ -1362,12 +1627,12 @@ def landing_page():
             </div>""", unsafe_allow_html=True)
         else:
             st.markdown("""
-            <div style="background:var(--bg-card);border:1px solid var(--border);
+            <div style="background:var(--bg-elev);border:1px solid var(--border);
                         border-radius:14px;padding:1.1rem 1.3rem;margin-bottom:1rem;">
-                <div style="font-size:.95rem;font-weight:700;color:#f5c646;margin-bottom:.3rem;">
+                <div style="font-size:.95rem;font-weight:700;color:#C8102E;margin-bottom:.3rem;">
                     💾 Persistent Storage · Empty
                 </div>
-                <div style="font-size:.88rem;color:#a6b4c8;">
+                <div style="font-size:.88rem;color:#4a4a4a;">
                     No data stored yet. Your first upload will create the table and
                     seed it. Future uploads will append automatically.
                 </div>
@@ -1376,8 +1641,8 @@ def landing_page():
         st.markdown("""
         <div style="background:var(--bg-card);border:1px solid var(--border);
                     border-radius:14px;padding:1.4rem;margin-bottom:1rem;">
-            <h3 style="color:#f5c646;margin:0 0 .5rem 0;">📁 Upload CSV / Excel</h3>
-            <p style="color:#a6b4c8;margin:0;font-size:.9rem;">
+            <h3 style="color:#C8102E;margin:0 0 .5rem 0;">📁 Upload CSV / Excel</h3>
+            <p style="color:#4a4a4a;margin:0;font-size:.9rem;">
                 Upload one or <b>multiple files</b> — they are appended to persistent
                 storage and the dashboard re-runs on the <b>full accumulated dataset</b>.
                 <br>Supported: <code>.csv</code>, <code>.xlsx</code>, <code>.xls</code>, <code>.xlsm</code>
@@ -1482,8 +1747,8 @@ def landing_page():
         st.markdown("""
         <div style="background:var(--bg-card);border:1px solid var(--border);
                     border-radius:14px;padding:1.4rem;margin-bottom:1rem;">
-            <h3 style="color:#f5c646;margin:0 0 .5rem 0;">🧪 Explore with sample data</h3>
-            <p style="color:#a6b4c8;margin:0;font-size:.9rem;">
+            <h3 style="color:#C8102E;margin:0 0 .5rem 0;">🧪 Explore with sample data</h3>
+            <p style="color:#4a4a4a;margin:0;font-size:.9rem;">
                 Generates 3,000 synthetic transactions across 8 stores so you can play with the dashboard.
             </p>
         </div>""", unsafe_allow_html=True)
@@ -1499,8 +1764,8 @@ def landing_page():
         st.markdown("""
         <div style="background:var(--bg-card);border:1px solid var(--border);
                     border-radius:14px;padding:1.4rem;margin-bottom:1rem;">
-            <h3 style="color:#f5c646;margin:0 0 .5rem 0;">💾 Persistent Data Storage</h3>
-            <p style="color:#a6b4c8;margin:0;font-size:.9rem;">
+            <h3 style="color:#C8102E;margin:0 0 .5rem 0;">💾 Persistent Data Storage</h3>
+            <p style="color:#4a4a4a;margin:0;font-size:.9rem;">
                 All uploads are stored locally in <code>msr_data.db</code> (SQLite).
                 Review what's in there, inspect the upload log, deduplicate, or
                 reset the table.
@@ -1698,12 +1963,12 @@ def render_sidebar(df: pd.DataFrame, metrics_df: pd.DataFrame, dd_df: pd.DataFra
     _sum = get_storage_summary()
     if _sum["exists"] and _sum["rows"] > 0:
         st.sidebar.markdown(
-            f"""<div style="background:var(--bg-card);border:1px solid var(--border);
+            f"""<div style="background:var(--bg-elev);border:1px solid var(--border);
                             border-radius:8px;padding:.6rem .75rem;margin:.4rem 0;
-                            font-size:.78rem;color:#a6b4c8;">
-                 💾 <b style="color:#f5c646;">Storage:</b>
+                            font-size:.78rem;color:#4a4a4a;">
+                 💾 <b style="color:#C8102E;">Storage:</b>
                  {_sum['rows']:,} rows · {_sum['uploads']} upload(s)
-                 <br><span style="color:#7689a3;">
+                 <br><span style="color:#7a7a7a;">
                  {_sum['min_date'] or '—'} → {_sum['max_date'] or '—'}
                  </span>
                </div>""",
@@ -1819,20 +2084,20 @@ def render_kpis(metrics_df, filtered_df, mtd_label):
 def _layout(fig, h=380):
     fig.update_layout(
         height=h, margin=dict(l=10,r=10,t=44,b=10),
-        plot_bgcolor="#111827", paper_bgcolor="#1a2233",
-        font=dict(family="Inter,Helvetica,Arial", color="#e8eef5", size=12),
-        title_font=dict(size=14, color="#f5c646"),
-        hoverlabel=dict(bgcolor="#0B2545", font_color="#fff",
-                        bordercolor="#4a8fe0"),
+        plot_bgcolor="#ffffff", paper_bgcolor="#ffffff",
+        font=dict(family="Inter,Helvetica,Arial", color="#1a1a1a", size=12),
+        title_font=dict(size=14, color="#C8102E"),
+        hoverlabel=dict(bgcolor="#ffffff", font_color="#1a1a1a",
+                        bordercolor="#C8102E"),
         legend=dict(orientation="h", y=-0.22, x=0.5, xanchor="center",
-                    bgcolor="rgba(0,0,0,0)", font=dict(color="#e8eef5")),
+                    bgcolor="rgba(0,0,0,0)", font=dict(color="#1a1a1a")),
     )
-    fig.update_xaxes(showgrid=False, linecolor="#2a3447",
-                     tickfont=dict(color="#a6b4c8"),
-                     title_font=dict(color="#a6b4c8"))
-    fig.update_yaxes(gridcolor="#2a3447", linecolor="#2a3447",
-                     tickfont=dict(color="#a6b4c8"),
-                     title_font=dict(color="#a6b4c8"))
+    fig.update_xaxes(showgrid=False, linecolor="#d0d0d0",
+                     tickfont=dict(color="#4a4a4a"),
+                     title_font=dict(color="#4a4a4a"))
+    fig.update_yaxes(gridcolor="#ececec", linecolor="#d0d0d0",
+                     tickfont=dict(color="#4a4a4a"),
+                     title_font=dict(color="#4a4a4a"))
     return fig
 
 def render_charts(metrics_df, filtered_df):
@@ -1847,7 +2112,7 @@ def render_charts(metrics_df, filtered_df):
                      color="Total NOC", color_continuous_scale=SEQ_BLUE,
                      text="Total NOC")
         fig.update_traces(textposition="outside", cliponaxis=False,
-                          textfont_color="#e8eef5")
+                          textfont_color="#1a1a1a")
         fig.update_layout(coloraxis_showscale=False,
                           yaxis_title=None, xaxis_title=None)
         st.plotly_chart(_layout(fig, 430), use_container_width=True)
@@ -1857,15 +2122,15 @@ def render_charts(metrics_df, filtered_df):
         fig = go.Figure(data=[go.Pie(
             labels=["MSR Members","Non-MSR"],
             values=[msr_t, non_t], hole=0.6,
-            marker=dict(colors=[PALETTE["gold"], PALETTE["grey"]],
-                        line=dict(color="#0a0e1a", width=2)),
+            marker=dict(colors=[PALETTE["red"], PALETTE["grey"]],
+                        line=dict(color="#ffffff", width=2)),
             textinfo="label+percent",
-            textfont=dict(color="#fff"),
+            textfont=dict(color="#ffffff"),
         )])
         fig.update_layout(title="MSR vs Non-MSR Split",
                           annotations=[dict(text=f"<b>{msr_t:,}</b><br>MSR",
                                             x=0.5, y=0.5, showarrow=False,
-                                            font=dict(size=14, color="#f5c646"))])
+                                            font=dict(size=14, color="#C8102E"))])
         st.plotly_chart(_layout(fig, 430), use_container_width=True)
 
     c3, c4 = st.columns(2)
@@ -1875,7 +2140,7 @@ def render_charts(metrics_df, filtered_df):
                         var_name="Segment", value_name="Count")
         fig = px.bar(long, x="label", y="Count", color="Segment", barmode="group",
                      title="MSR vs Non-MSR by Store (Top 10)",
-                     color_discrete_map={"Unique MSR Members": PALETTE["gold"],
+                     color_discrete_map={"Unique MSR Members": PALETTE["red"],
                                          "Unique Non-MSR Members": PALETTE["grey"]})
         fig.update_layout(xaxis_title=None, yaxis_title=None, xaxis_tickangle=-30)
         st.plotly_chart(_layout(fig), use_container_width=True)
@@ -1884,8 +2149,8 @@ def render_charts(metrics_df, filtered_df):
                          var_name="Slab", value_name="Count")
         fig = px.bar(long2, x="label", y="Count", color="Slab", barmode="stack",
                      title="Bills >2K vs ≤2K (Non-MSR, Top 10)",
-                     color_discrete_map={"Bills >2K": PALETTE["blue"],
-                                         "Bills ≤2K": PALETTE["teal"]})
+                     color_discrete_map={"Bills >2K": "#C8102E",
+                                         "Bills ≤2K": "#1a1a1a"})
         fig.update_layout(xaxis_title=None, yaxis_title=None, xaxis_tickangle=-30)
         st.plotly_chart(_layout(fig), use_container_width=True)
 
@@ -1905,10 +2170,10 @@ def render_charts(metrics_df, filtered_df):
         fig.add_trace(go.Scatter(
             x=trend["shopping_month"], y=trend["Conversion %"],
             mode="lines+markers", name="Conversion %",
-            line=dict(color=PALETTE["blue"], width=3),
-            marker=dict(size=11, color=PALETTE["gold"],
-                        line=dict(width=2, color="#0a0e1a")),
-            fill="tozeroy", fillcolor="rgba(74,143,224,.12)",
+            line=dict(color=PALETTE["red"], width=3),
+            marker=dict(size=11, color="#1a1a1a",
+                        line=dict(width=2, color="#ffffff")),
+            fill="tozeroy", fillcolor="rgba(200,16,46,.10)",
         ))
         fig.update_layout(title="Monthly Conversion Trend",
                           yaxis_title="Conversion %", xaxis_title=None)
@@ -1965,6 +2230,54 @@ def render_drilldown_table(dd_df):
         except Exception as e:
             st.caption(f"PDF unavailable: {e}")
 
+
+def render_detailed_view_table(dv_df: pd.DataFrame):
+    """Render the new-format Detailed View table with light styling and a
+    matching white-background PDF download button."""
+    if dv_df is None or dv_df.empty:
+        st.info("No detailed-view data for current filters.")
+        return
+
+    display = dv_df.copy()
+    # Pretty-print percentage columns
+    for col in ["Last Day Enrollment %", "MTD member Enrollment %"]:
+        if col in display.columns:
+            display[col] = display[col].apply(lambda v: f"{v:.2f}%")
+
+    styled = style_metrics(display)
+    st.dataframe(styled, use_container_width=True, height=540)
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M")
+    dl1, dl2, dl3 = st.columns(3)
+    with dl1:
+        st.download_button(
+            "⬇️ Download CSV – Detailed View",
+            to_csv_bytes(display),
+            f"detailed_view_{ts}.csv", "text/csv",
+            use_container_width=True, key=f"csv_detailed_{ts}",
+        )
+    with dl2:
+        try:
+            st.download_button(
+                "⬇️ Download Excel – Detailed View",
+                to_excel_bytes(display, "DetailedView"),
+                f"detailed_view_{ts}.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True, key=f"xlsx_detailed_{ts}",
+            )
+        except Exception as e:
+            st.caption(f"Excel unavailable: {e}")
+    with dl3:
+        try:
+            pdf_b = to_pdf_bytes(display, "Detailed View")
+            st.download_button(
+                "⬇️ Download PDF – Detailed View", pdf_b,
+                f"detailed_view_{ts}.pdf", "application/pdf",
+                use_container_width=True, key=f"pdf_detailed_{ts}",
+            )
+        except Exception as e:
+            st.caption(f"PDF unavailable: {e}")
+
 # ────────────────────────────────────────────────────────────────────────────
 # Dashboard page
 # ────────────────────────────────────────────────────────────────────────────
@@ -1992,8 +2305,11 @@ def dashboard_page():
     # Diagnostics panel — open automatically when MTD is 0
     render_diagnostics(df)
 
-    tab_summary, tab_drill = st.tabs(["📊 Summary Dashboard",
-                                       "🔍 Drill-Down (Day × Store)"])
+    tab_summary, tab_drill, tab_detailed = st.tabs([
+        "📊 Summary Dashboard",
+        "🔍 Drill-Down (Day × Store)",
+        "📋 Detailed View",
+    ])
 
     with tab_summary:
         metrics_all = calculate_metrics(df)
@@ -2076,6 +2392,41 @@ def dashboard_page():
             except Exception as e:
                 st.caption(f"Excel unavailable: {e}")
 
+    # ── NEW: Detailed View tab — matches the new-format CSV layout ──────────
+    with tab_detailed:
+        section("Detailed View – Store Director × Member Performance", "📋")
+        st.markdown("""
+        This view follows the **new reporting format** with one row per store.
+        Columns: Store Director Name (auto-populated), ASM Name, MTD totals
+        for customers, members and non-members, plus same-day enrollment
+        rates.
+        """)
+
+        # Reuse the same filtered data and metrics computed in the Summary tab.
+        # If for any reason they were not produced (e.g. user landed straight
+        # on the Detailed tab and apply_filters wiped the dataset), fall back
+        # to the unfiltered raw data.
+        try:
+            base_filtered = filtered
+            base_metrics  = metrics
+        except NameError:
+            base_filtered = df
+            base_metrics  = calculate_metrics(df)
+
+        detailed_df = calculate_detailed_view(base_filtered, base_metrics)
+
+        # Optional store filter, mirroring the drill-down tab UX
+        if not detailed_df.empty and "Store Name" in detailed_df.columns:
+            stores_dv = sorted(detailed_df["Store Name"].dropna().unique().tolist())
+            sel_dv = st.multiselect("Filter by Store (Detailed View only)",
+                                    ["All"] + stores_dv, default=["All"],
+                                    key="dv_store_filter")
+            if sel_dv and "All" not in sel_dv:
+                detailed_df = detailed_df[detailed_df["Store Name"].isin(sel_dv)]
+
+        st.caption(f"Showing **{len(detailed_df):,}** stores")
+        render_detailed_view_table(detailed_df)
+
 # ────────────────────────────────────────────────────────────────────────────
 # Viewer-only "no data yet" page
 # ────────────────────────────────────────────────────────────────────────────
@@ -2084,13 +2435,14 @@ def viewer_no_data_page():
     render_hero("Live dashboard · waiting for admin to upload data")
     st.markdown("""
     <div style="background:var(--bg-card);border:1px solid var(--border);
-                border-radius:14px;padding:2rem;margin-top:1rem;text-align:center;">
-        <h2 style="color:#f5c646;margin:0 0 .6rem 0;">📭 No data available yet</h2>
-        <p style="color:#a6b4c8;font-size:.95rem;margin:0;">
+                border-radius:14px;padding:2rem;margin-top:1rem;text-align:center;
+                box-shadow:0 1px 3px rgba(0,0,0,.04);">
+        <h2 style="color:#C8102E;margin:0 0 .6rem 0;">📭 No data available yet</h2>
+        <p style="color:#4a4a4a;font-size:.95rem;margin:0;">
             An admin has not uploaded any data to this dashboard yet.<br>
             Please check back later, or contact your administrator.
         </p>
-        <p style="color:#7689a3;font-size:.82rem;margin-top:1rem;">
+        <p style="color:#7a7a7a;font-size:.82rem;margin-top:1rem;">
             Admins: sign in from the sidebar to upload your first file.
         </p>
     </div>

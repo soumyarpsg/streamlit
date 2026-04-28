@@ -224,10 +224,10 @@ def render_auth_sidebar() -> bool:
         if is_logged_in():
             uname = current_user()
             st.markdown(
-                f"""<div style="background:#1e4430;border:1px solid #2A9D8F;
-                               color:#8ff0a8;padding:.55rem .8rem;border-radius:8px;
+                f"""<div style="background:#e7f5e9;border:1px solid #2e7d32;
+                               color:#1e6b27;padding:.55rem .8rem;border-radius:8px;
                                font-size:.85rem;margin-bottom:.5rem;
-                               word-break:break-all;">
+                               word-break:break-all;font-weight:500;">
                       ✅ Signed in as <b>{uname}</b>
                     </div>""",
                 unsafe_allow_html=True,

@@ -1133,11 +1133,13 @@ def calculate_drilldown(df: pd.DataFrame, mtd_month_label: Optional[str] = None)
 
 @st.cache_data(show_spinner=False)
 def calculate_detailed_view(df: pd.DataFrame,
-                             metrics_df: pd.DataFrame) -> pd.DataFrame:
+                             metrics_df: pd.DataFrame,
+                             mtd_cohort_label: Optional[str] = None,
+                             current_month_label: Optional[str] = None) -> pd.DataFrame:
     """Build the 'Detailed View' table that mirrors the new-format CSV.
 
     Columns produced (in order):
-      Store Code · Store Name · Store Director Name · ASM Name ·
+      Store Code · Store Name · Store Director Name ·
       TTL MTD Customer · Last Day Non Member Shopped ·
       Last Day member Enrollment · Last Day Enrollment % ·
       MTD Non Member Shopped · MTD member Enrollment · MTD member Enrollment %
@@ -1145,10 +1147,18 @@ def calculate_detailed_view(df: pd.DataFrame,
     Enrollment % formulas:
       Last Day Enrollment %  = Last Day Member Enrollment / Last Day Non Member Shopped × 100
       MTD member Enrollment % = MTD Enrollment / MTD Non Member Shopped × 100
+
+    MTD Cohort modes:
+      - mtd_cohort_label is None / "Current Month" → MTD member Enrollment counts
+        members whose msr_month month-year equals the current month (default).
+      - mtd_cohort_label is a previous month label (e.g. "Oct-25") → MTD member
+        Enrollment is replaced with the count of members whose msr_month falls
+        in that prior cohort AND who have shopped in current_month_label
+        (i.e. returnees from the chosen cohort).
     """
     if df.empty or metrics_df is None or metrics_df.empty:
         return pd.DataFrame(columns=[
-            "Store Code", "Store Name", "Store Director Name", "ASM Name",
+            "Store Code", "Store Name", "Store Director Name",
             "TTL MTD Customer", "Last Day Non Member Shopped",
             "Last Day member Enrollment", "Last Day Enrollment %",
             "MTD Non Member Shopped", "MTD member Enrollment",
@@ -1164,6 +1174,35 @@ def calculate_detailed_view(df: pd.DataFrame,
         if col not in m.columns:
             m[col] = 0
 
+    # ── Cohort override ────────────────────────────────────────────────────
+    # When a previous-month cohort is requested, replace each store's MTD
+    # Enrollment count with the number of members whose msr_month falls in
+    # the selected cohort AND who have shopped in the current shopping month
+    # (i.e. returnees from that cohort).
+    cohort_active = (
+        mtd_cohort_label is not None
+        and mtd_cohort_label != "Current Month"
+        and current_month_label
+        and "enroll_month" in df.columns
+        and "shopping_month" in df.columns
+        and "is_msr" in df.columns
+    )
+    if cohort_active:
+        cohort_rows = df[
+            df["is_msr"]
+            & (df["enroll_month"] == mtd_cohort_label)
+            & (df["shopping_month"] == current_month_label)
+        ]
+        if "store_code" in cohort_rows.columns and not cohort_rows.empty:
+            cohort_counts = (cohort_rows
+                             .groupby("store_code")["mobile_number"]
+                             .nunique())
+            m["MTD Enrollment"] = (
+                m["Store Code"].map(cohort_counts).fillna(0).astype(int)
+            )
+        else:
+            m["MTD Enrollment"] = 0
+
     # Last Day Enrollment % = Last Day Member Enrollment / Last Day Non Member Shopped × 100
     last_day_nonmem = m["Last Day Non Member Shopped"].astype(float)
     m["Last Day Enrollment %"] = np.where(
@@ -1173,6 +1212,8 @@ def calculate_detailed_view(df: pd.DataFrame,
     )
 
     # MTD Enrollment % = MTD Enrollment / MTD Non Member Shopped × 100
+    # (When cohort_active, this becomes the "return rate" — returnees as a
+    # share of this month's non-member shoppers.)
     mtd_nonmem = m["Unique Non-MSR Members"].astype(float)
     m["MTD member Enrollment %"] = np.where(
         mtd_nonmem > 0,
@@ -1191,7 +1232,6 @@ def calculate_detailed_view(df: pd.DataFrame,
         "Store Code"                : m["Store Code"]                if "Store Code" in m.columns else "",
         "Store Name"                : m["Store Name"]                if "Store Name" in m.columns else "",
         "Store Director Name"       : m["Store Director Name"],
-        "ASM Name"                  : m["ASM Name"]                  if "ASM Name"   in m.columns else "",
         "Last Day Non Member Shopped": m["Last Day Non Member Shopped"].astype(int),
         "Last Day member Enrollment": m["Last Day Member Enrollment"].astype(int),
         "Last Day Enrollment %"     : m["Last Day Enrollment %"],
@@ -2080,6 +2120,21 @@ def render_sidebar(df: pd.DataFrame, metrics_df: pd.DataFrame, dd_df: pd.DataFra
                          if "reporting_month" in df.columns else []
     reporting_month = st.sidebar.selectbox("Reporting Month", ["All"] + report_opts)
 
+    # ── MTD Cohort selector (Detailed View only) ────────────────────────────
+    # Default = "Current Month" → MTD member Enrollment column counts
+    # current-month enrollers who shopped this month.
+    # Pick a previous month → the MTD column shows that prior-month cohort's
+    # members who returned to shop this month.
+    cohort_opts = ["Current Month"] + [m for m in enroll_opts] if enroll_opts else ["Current Month"]
+    mtd_cohort = st.sidebar.selectbox(
+        "MTD Cohort (Detailed View only)",
+        cohort_opts,
+        index=0,
+        help=("Default 'Current Month' shows members enrolled this month "
+              "who shopped this month. Selecting a previous month shows how "
+              "many of that month's enrollees have returned to shop this month."),
+    )
+
     # Exports
     st.sidebar.markdown("---")
     st.sidebar.markdown("### 📤 Export Summary")
@@ -2117,6 +2172,7 @@ def render_sidebar(df: pd.DataFrame, metrics_df: pd.DataFrame, dd_df: pd.DataFra
         "shopping_months" : shopping_months,
         "enroll_months"   : enroll_months,
         "reporting_month" : reporting_month,
+        "mtd_cohort"      : mtd_cohort,
         "search"          : search,
     }
 
@@ -2415,14 +2471,36 @@ def dashboard_page():
     # ── Render Detailed View body ───────────────────────────────────────────
     def _render_detailed_view_body():
         section("Detailed View – Store Director × Member Performance", "📋")
-        st.markdown("""
-        This view follows the **new reporting format** with one row per store.
-        Columns: Store Director Name (auto-populated), ASM Name, MTD totals
-        for customers, members and non-members, plus same-day enrollment
-        rates.
-        """)
 
-        detailed_df = calculate_detailed_view(filtered, metrics)
+        cohort_sel = filters.get("mtd_cohort", "Current Month")
+        cohort_active = bool(cohort_sel) and cohort_sel != "Current Month"
+
+        if cohort_active:
+            st.markdown(f"""
+            <div style="background:#fff5f5;border-left:4px solid #C8102E;
+                        border-radius:6px;padding:.75rem 1rem;margin:.5rem 0 1rem 0;
+                        color:#1a1a1a;font-size:.9rem;">
+              📌 <b>Cohort mode active</b> — the <i>MTD member Enrollment</i>
+              column now shows members who enrolled in
+              <b>{cohort_sel}</b> and have <b>returned to shop in {mtd_label}</b>.
+              The percentage is the return rate against this month's
+              non-member shopper base.
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown(f"""
+            This view follows the **new reporting format** with one row per store.
+            Columns: Store Director Name (auto-populated), MTD totals for
+            customers, members and non-members, plus same-day enrollment rates.
+            *MTD member Enrollment* counts members enrolled **this month**
+            (`{mtd_label}`).
+            """)
+
+        detailed_df = calculate_detailed_view(
+            filtered, metrics,
+            mtd_cohort_label=cohort_sel,
+            current_month_label=mtd_label,
+        )
 
         # Optional store filter, mirroring the drill-down tab UX
         if not detailed_df.empty and "Store Name" in detailed_df.columns:

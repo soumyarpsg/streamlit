@@ -476,7 +476,7 @@ STORE_DIRECTORS: dict[str, str] = {
     "H048": "Virendra Yadav",
     "H049": "Md Noor Asif",
     "H069": "Debojit Roy Bardhan",
-    "H072": "Biswanath Mukherjee",
+    "H072": "Sayantan Mishra",
     "H081": "Arindam Chakraborty",
     "H090": "Amit Shaw",
     "H100": "Sandeep Sharma",

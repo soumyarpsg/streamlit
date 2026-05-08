@@ -1137,14 +1137,18 @@ def calculate_detailed_view(df: pd.DataFrame,
     """Build the 'Detailed View' table that mirrors the new-format CSV.
 
     Columns produced (in order):
-      Store Name · Store Director Name · ASM Name ·
+      Store Code · Store Name · Store Director Name · ASM Name ·
       TTL MTD Customer · Last Day Non Member Shopped ·
       Last Day member Enrollment · Last Day Enrollment % ·
       MTD Non Member Shopped · MTD member Enrollment · MTD member Enrollment %
+
+    Enrollment % formulas:
+      Last Day Enrollment %  = Last Day Member Enrollment / Last Day Non Member Shopped × 100
+      MTD member Enrollment % = MTD Enrollment / MTD Non Member Shopped × 100
     """
     if df.empty or metrics_df is None or metrics_df.empty:
         return pd.DataFrame(columns=[
-            "Store Name", "Store Director Name", "ASM Name",
+            "Store Code", "Store Name", "Store Director Name", "ASM Name",
             "TTL MTD Customer", "Last Day Non Member Shopped",
             "Last Day member Enrollment", "Last Day Enrollment %",
             "MTD Non Member Shopped", "MTD member Enrollment",
@@ -1160,19 +1164,19 @@ def calculate_detailed_view(df: pd.DataFrame,
         if col not in m.columns:
             m[col] = 0
 
-    # Last Day Enrollment % = Last Day Member Enrollment / Last Day NOC × 100
-    last_day_total = m["Last Day NOC"].astype(float)
+    # Last Day Enrollment % = Last Day Member Enrollment / Last Day Non Member Shopped × 100
+    last_day_nonmem = m["Last Day Non Member Shopped"].astype(float)
     m["Last Day Enrollment %"] = np.where(
-        last_day_total > 0,
-        (m["Last Day Member Enrollment"].astype(float) / last_day_total * 100).round(2),
+        last_day_nonmem > 0,
+        (m["Last Day Member Enrollment"].astype(float) / last_day_nonmem * 100).round(2),
         0.0,
     )
 
-    # MTD Enrollment % = MTD Enrollment / Total NOC × 100
-    mtd_total = m["Total NOC"].astype(float)
+    # MTD Enrollment % = MTD Enrollment / MTD Non Member Shopped × 100
+    mtd_nonmem = m["Unique Non-MSR Members"].astype(float)
     m["MTD member Enrollment %"] = np.where(
-        mtd_total > 0,
-        (m["MTD Enrollment"].astype(float) / mtd_total * 100).round(2),
+        mtd_nonmem > 0,
+        (m["MTD Enrollment"].astype(float) / mtd_nonmem * 100).round(2),
         0.0,
     )
 
@@ -1184,6 +1188,7 @@ def calculate_detailed_view(df: pd.DataFrame,
 
     # Final shape — match the new-format CSV exactly
     detailed = pd.DataFrame({
+        "Store Code"                : m["Store Code"]                if "Store Code" in m.columns else "",
         "Store Name"                : m["Store Name"]                if "Store Name" in m.columns else "",
         "Store Director Name"       : m["Store Director Name"],
         "ASM Name"                  : m["ASM Name"]                  if "ASM Name"   in m.columns else "",

@@ -70,6 +70,163 @@ st.set_page_config(
 )
 
 # ────────────────────────────────────────────────────────────────────────────
+# 24×7 Keep-Alive system
+# ────────────────────────────────────────────────────────────────────────────
+# Streamlit Community Cloud puts apps to sleep after ~7 days without traffic
+# (and individual sessions sleep after a few minutes of browser inactivity).
+# This dashboard runs 365 days a year, so we use a *three-layer* defence:
+#
+#   1. **Lightweight health endpoint**  — any external uptime monitor (or
+#      Streamlit itself) can hit `?keepalive=1`. The app short-circuits, prints
+#      "OK" + an IST timestamp, and exits. This is what UptimeRobot / cron-job
+#      should ping every 5 minutes — see the sidebar "Keep-Alive" panel.
+#
+#   2. **Background self-ping thread**  — while the Python process is alive on
+#      the server, a daemon thread hits the public URL every 4 minutes. This
+#      resets Streamlit's idle timer so the session never falls asleep on its
+#      own. Stored on `st.cache_resource` so it is launched exactly once per
+#      server boot, never per user/refresh.
+#
+#   3. **Browser heartbeat**            — when a viewer has the dashboard open,
+#      an injected `<script>` `fetch()`es the keepalive URL every 4 minutes,
+#      so the tab itself keeps the app warm.
+#
+# Together these guarantee the app stays awake 24×7, 365 days.
+# ────────────────────────────────────────────────────────────────────────────
+
+# Layer 1 — Health endpoint. Must run BEFORE any heavy imports / data loads.
+# Streamlit exposes query params via st.query_params (≥1.30) or the legacy
+# st.experimental_get_query_params(); we support both.
+def _read_query_params() -> dict:
+    """Return URL query params as a plain dict regardless of Streamlit version."""
+    try:
+        qp = st.query_params
+        return {k: (v if isinstance(v, str) else (v[0] if v else ""))
+                for k, v in dict(qp).items()}
+    except Exception:
+        try:
+            qp = st.experimental_get_query_params()
+            return {k: (v[0] if isinstance(v, list) and v else v) for k, v in qp.items()}
+        except Exception:
+            return {}
+
+
+_qp = _read_query_params()
+if _qp.get("keepalive") in ("1", "true", "yes"):
+    # Minimal heartbeat response — no data load, no DB hit, no auth.
+    _ist_now = datetime.now(timezone(timedelta(hours=5, minutes=30)))
+    st.markdown(
+        f"<pre style='font-family:monospace;color:#1a1a1a;background:#ffffff;"
+        f"padding:.5rem;border:1px solid #e6e6e6;border-radius:6px;'>"
+        f"OK · MSR Dashboard alive · {_ist_now.strftime('%Y-%m-%d %H:%M:%S IST')}"
+        f"</pre>",
+        unsafe_allow_html=True,
+    )
+    st.stop()
+
+
+# Layer 2 — Background self-ping thread. Runs once per server boot.
+@st.cache_resource(show_spinner=False)
+def _start_keepalive_thread() -> dict:
+    """Launch a daemon thread that pings the app URL every 4 minutes.
+
+    Returns a status dict that's also displayed in the sidebar so the admin
+    can confirm the heartbeat is alive. The thread is cached as a resource,
+    which means Streamlit instantiates it exactly once per process — every
+    rerun reuses the same thread.
+    """
+    import os
+    import threading
+    import time
+    from urllib.request import Request, urlopen
+
+    status = {
+        "started_at": datetime.now(timezone(timedelta(hours=5, minutes=30)))
+                              .strftime("%Y-%m-%d %H:%M:%S IST"),
+        "url": None,
+        "last_ping": None,
+        "last_status": None,
+        "ping_count": 0,
+        "errors": 0,
+    }
+
+    # Discover the public URL of this app. Set KEEPALIVE_URL in Streamlit
+    # Secrets (Settings → Secrets) for guaranteed correctness; otherwise we
+    # fall back to Streamlit Cloud's STREAMLIT_SERVER_BASE_URL_PATH env var,
+    # then to localhost (useful during local dev).
+    target = None
+    try:
+        # st.secrets raises if no secrets.toml is configured — guard it.
+        target = st.secrets.get("KEEPALIVE_URL")  # type: ignore[attr-defined]
+    except Exception:
+        target = None
+    if not target:
+        target = os.environ.get("KEEPALIVE_URL")
+    if not target:
+        # Streamlit Cloud sets these; otherwise default to localhost.
+        host = os.environ.get("STREAMLIT_SERVER_ADDRESS", "127.0.0.1")
+        port = os.environ.get("STREAMLIT_SERVER_PORT", "8501")
+        target = f"http://{host}:{port}/"
+
+    sep = "&" if "?" in target else "?"
+    ping_url = f"{target}{sep}keepalive=1"
+    status["url"] = ping_url
+
+    def _loop():
+        # Wait a bit before the first ping so the server has time to bind.
+        time.sleep(30)
+        while True:
+            try:
+                req = Request(ping_url, headers={"User-Agent": "MSR-KeepAlive/1.0"})
+                with urlopen(req, timeout=20) as resp:  # noqa: S310
+                    status["last_status"] = resp.status
+                status["ping_count"] += 1
+            except Exception as e:  # noqa: BLE001
+                status["errors"] += 1
+                status["last_status"] = f"ERR: {type(e).__name__}"
+            status["last_ping"] = (
+                datetime.now(timezone(timedelta(hours=5, minutes=30)))
+                        .strftime("%Y-%m-%d %H:%M:%S IST")
+            )
+            # 4 minutes — well under Streamlit's idle timeout.
+            time.sleep(240)
+
+    t = threading.Thread(target=_loop, name="msr-keepalive", daemon=True)
+    t.start()
+    status["thread_alive"] = t.is_alive()
+    return status
+
+
+_KEEPALIVE_STATUS = _start_keepalive_thread()
+
+
+# Layer 3 — Browser-side heartbeat. Injected once per page load.
+# Uses fetch() with the same-origin keepalive URL so it works regardless of
+# where the app is deployed. Only fires while at least one tab is open.
+st.markdown(
+    """
+    <script>
+    (function() {
+        if (window.__msrKeepAliveStarted) return;
+        window.__msrKeepAliveStarted = true;
+        const ping = () => {
+            try {
+                const u = new URL(window.location.href);
+                u.searchParams.set('keepalive', '1');
+                fetch(u.toString(), {cache: 'no-store', credentials: 'omit'})
+                    .catch(() => {});
+            } catch (e) { /* swallow */ }
+        };
+        // First ping after 30 s, then every 4 minutes.
+        setTimeout(ping, 30000);
+        setInterval(ping, 240000);
+    })();
+    </script>
+    """,
+    unsafe_allow_html=True,
+)
+
+# ────────────────────────────────────────────────────────────────────────────
 # Light-mode CSS — Spencer's Retail Red & White theme (matches AMS Migration)
 # ────────────────────────────────────────────────────────────────────────────
 CUSTOM_CSS = """
@@ -533,6 +690,154 @@ def lookup_store_director(store_code: str) -> str:
         return "-"
     key = str(store_code).strip().upper()
     return STORE_DIRECTORS.get(key, "-")
+
+# ────────────────────────────────────────────────────────────────────────────
+# ASM (Area Sales Manager) directory (sourced from LOOKUPS.xlsx → SRL sheet)
+# Maps Store Code → ASM Name. Used by the Detailed View tab so the ASM column
+# auto-populates from the canonical lookup, not from whatever asm_name value
+# happens to be in the uploaded transactions CSV. Codes are matched
+# case-insensitively and trimmed of whitespace before lookup.
+# ────────────────────────────────────────────────────────────────────────────
+ASM_NAMES: dict[str, str] = {
+    "D070": "Sagar SenGupta",
+    "D087": "Awadhesh Yadav",
+    "D089": "Sudipto Chowdhury",
+    "D104": "Sudipto Chowdhury",
+    "D166": "Sagar SenGupta",
+    "D202": "Sagar SenGupta",
+    "D263": "Vishal Singh",
+    "D265": "Vishal Singh",
+    "D266": "Vishal Singh",
+    "D269": "Vishal Singh",
+    "D270": "Vishal Singh",
+    "D278": "Vishal Singh",
+    "D333": "Vishal Singh",
+    "D345": "Vishal Singh",
+    "D346": "Chandan Kumar",
+    "D354": "Sagar SenGupta",
+    "D357": "Vishal Singh",
+    "D359": "Awadhesh Yadav",
+    "D360": "Vishal Singh",
+    "D362": "Vishal Singh",
+    "D365": "Awadhesh Yadav",
+    "D371": "Awadhesh Yadav",
+    "D374": "Sagar SenGupta",
+    "D375": "Sagar SenGupta",
+    "D378": "Sagar SenGupta",
+    "D379": "Sagar SenGupta",
+    "D386": "Vishal Singh",
+    "D388": "Sagar SenGupta",
+    "D390": "Chandan Kumar",
+    "D391": "Awadhesh Yadav",
+    "D394": "Chandan Kumar",
+    "D400": "Sagar SenGupta",
+    "D410": "Sagar SenGupta",
+    "D418": "Sudipto Chowdhury",
+    "E005": "Rest of East",
+    "H009": "Awadhesh Yadav",
+    "H012": "Rohit Karmakar",
+    "H013": "Awadhesh Yadav",
+    "H029": "Vishal Singh",
+    "H030": "Chandan Kumar",
+    "H042": "Sudipto Chowdhury",
+    "H048": "Vishal Singh",
+    "H049": "Md Noor Asif",
+    "H069": "Awadhesh Yadav",
+    "H072": "Sayantan Mishra",
+    "H081": "Sagar SenGupta",
+    "H090": "Sudipto Chowdhury",
+    "H100": "Sagar SenGupta",
+    "H104": "Sagar SenGupta",
+    "H115": "Sagar SenGupta",
+    "H126": "Vishal Singh",
+    "H129": "Vishal Singh",
+    "H139": "Awadhesh Yadav",
+    "H143": "Chandan Kumar",
+    "I008": "Rest of North",
+    "I039": "Rest of East",
+    "I052": "Rest of North",
+    "J009": "Awadhesh Yadav",
+    "J012": "Rohit Karmakar",
+    "J013": "Awadhesh Yadav",
+    "J030": "Chandan Kumar",
+    "J048": "Vishal Singh",
+    "J069": "Awadhesh Yadav",
+    "J072": "Biswanath Mukherjee",
+    "J090": "Sudipto Chowdhury",
+    "J100": "Sagar SenGupta",
+    "J104": "Sagar SenGupta",
+    "J115": "Sagar SenGupta",
+    "J143": "Chandan Kumar",
+    "K070": "Sagar SenGupta",
+    "K374": "Sagar SenGupta",
+    "K375": "Sagar SenGupta",
+    "K378": "Sagar SenGupta",
+    "K388": "Sagar SenGupta",
+    "K391": "Awadhesh Yadav",
+    "M053": "Sagar SenGupta",
+    "S004": "Sagar SenGupta",
+    "S040": "Chandan Kumar",
+    "S041": "Awadhesh Yadav",
+    "S046": "Awadhesh Yadav",
+    "S053": "Chandan Kumar",
+    "S055": "Chandan Kumar",
+    "S056": "Sudipto Chowdhury",
+    "S059": "Sagar SenGupta",
+    "S060": "Awadhesh Yadav",
+    "S062": "Sagar SenGupta",
+    "S064": "Sudipto Chowdhury",
+    "S065": "Sagar SenGupta",
+    "S066": "Sagar SenGupta",
+    "S070": "Sagar SenGupta",
+    "S077": "Sagar SenGupta",
+    "S080": "Sudipto Chowdhury",
+    "S083": "Vishal Singh",
+    "S085": "Sagar SenGupta",
+    "S088": "Chandan Kumar",
+    "S089": "Chandan Kumar",
+    "S090": "Awadhesh Yadav",
+    "S091": "Chandan Kumar",
+    "S095": "Sudipto Chowdhury",
+    "S100": "Sagar SenGupta",
+    "S106": "Vishal Singh",
+    "S110": "Chandan Kumar",
+    "S111": "Awadhesh Yadav",
+    "S113": "Chandan Kumar",
+    "S117": "Wholesale - Sudipto Chowdhury",
+    "S119": "Sudipto Chowdhury",
+    "S120": "Sagar SenGupta",
+    "S121": "Vishal Singh",
+    "T041": "Awadhesh Yadav",
+    "T046": "Awadhesh Yadav",
+    "T055": "Chandan Kumar",
+    "T059": "Sagar SenGupta",
+    "T060": "Awadhesh Yadav",
+    "T062": "Sagar SenGupta",
+    "T065": "Sagar SenGupta",
+    "T066": "Sagar SenGupta",
+    "T070": "Sagar SenGupta",
+    "T077": "Sagar SenGupta",
+    "T085": "Sagar SenGupta",
+    "T088": "Chandan Kumar",
+    "T100": "Sagar SenGupta",
+    "T110": "Chandan Kumar",
+    "T120": "Sagar SenGupta",
+    "V010": "Chandan Kumar(BARODA)",
+    "X011": "Awadhesh Yadav",
+    "X015": "Sagar SenGupta",
+    "X017": "Awadhesh Yadav",
+    "X019": "Awadhesh Yadav",
+    "Y011": "Awadhesh Yadav",
+    "Y017": "Awadhesh Yadav",
+}
+
+
+def lookup_asm_name(store_code: str) -> str:
+    """Return the ASM Name for a given store code, or '-' if unknown."""
+    if store_code is None:
+        return "-"
+    key = str(store_code).strip().upper()
+    return ASM_NAMES.get(key, "-")
 
 # ────────────────────────────────────────────────────────────────────────────
 # 💾 Persistent storage (SQLite)
@@ -1139,7 +1444,7 @@ def calculate_detailed_view(df: pd.DataFrame,
     """Build the 'Detailed View' table that mirrors the new-format CSV.
 
     Columns produced (in order):
-      Store Code · Store Name · Store Director Name ·
+      Store Code · Store Name · Store Director Name · ASM Name ·
       TTL MTD Customer · Last Day Non Member Shopped ·
       Last Day member Enrollment · Last Day Enrollment % ·
       MTD Non Member Shopped · MTD member Enrollment · MTD member Enrollment %
@@ -1149,8 +1454,10 @@ def calculate_detailed_view(df: pd.DataFrame,
       MTD member Enrollment % = MTD Enrollment / MTD Non Member Shopped × 100
 
     MTD Cohort modes:
-      - mtd_cohort_label is None / "Current Month" → MTD member Enrollment counts
-        members whose msr_month month-year equals the current month (default).
+      - mtd_cohort_label is None / "Current Month" → MTD member Enrollment is
+        the count of unique members per store whose `msr_month` falls in the
+        current reporting month (deduplicated by mobile_number). This is the
+        literal interpretation of the new reporting format.
       - mtd_cohort_label is a previous month label (e.g. "Oct-25") → MTD member
         Enrollment is replaced with the count of members whose msr_month falls
         in that prior cohort AND who have shopped in current_month_label
@@ -1158,7 +1465,7 @@ def calculate_detailed_view(df: pd.DataFrame,
     """
     if df.empty or metrics_df is None or metrics_df.empty:
         return pd.DataFrame(columns=[
-            "Store Code", "Store Name", "Store Director Name",
+            "Store Code", "Store Name", "Store Director Name", "ASM Name",
             "TTL MTD Customer", "Last Day Non Member Shopped",
             "Last Day member Enrollment", "Last Day Enrollment %",
             "MTD Non Member Shopped", "MTD member Enrollment",
@@ -1202,6 +1509,44 @@ def calculate_detailed_view(df: pd.DataFrame,
             )
         else:
             m["MTD Enrollment"] = 0
+    else:
+        # ── Current-Month mode (default) ──────────────────────────────────
+        # Explicitly count unique MSR members per store whose `msr_month`
+        # falls in the current reporting month. This is the literal
+        # definition of "MTD member Enrollment" as per the new reporting
+        # format and overrides any pre-aggregated value in metrics_df so
+        # the column always reflects: customers whose msr_month is the
+        # current month, deduplicated by mobile_number.
+        if (
+            "enroll_month" in df.columns
+            and "is_msr" in df.columns
+            and "store_code" in df.columns
+        ):
+            # Determine which month label to treat as "current".
+            # Priority: explicit current_month_label → max shopping_month in
+            # the uploaded data → today's month in IST.
+            target_month = current_month_label
+            if not target_month and "shopping_month" in df.columns:
+                shop_periods = df["shopping_period"].dropna() \
+                    if "shopping_period" in df.columns else pd.Series(dtype="object")
+                if not shop_periods.empty:
+                    target_month = shop_periods.max().strftime("%b-%y")
+            if not target_month:
+                target_month = today_ist().strftime("%b-%y")
+
+            current_rows = df[
+                df["is_msr"]
+                & (df["enroll_month"] == target_month)
+            ]
+            if not current_rows.empty:
+                current_counts = (current_rows
+                                  .groupby("store_code")["mobile_number"]
+                                  .nunique())
+                m["MTD Enrollment"] = (
+                    m["Store Code"].map(current_counts).fillna(0).astype(int)
+                )
+            else:
+                m["MTD Enrollment"] = 0
 
     # Last Day Enrollment % = Last Day Member Enrollment / Last Day Non Member Shopped × 100
     last_day_nonmem = m["Last Day Non Member Shopped"].astype(float)
@@ -1227,11 +1572,18 @@ def calculate_detailed_view(df: pd.DataFrame,
     else:
         m["Store Director Name"] = "-"
 
+    # Pull the ASM Name from the lookup (LOOKUPS.xlsx → SRL sheet)
+    if "Store Code" in m.columns:
+        m["ASM Name"] = m["Store Code"].apply(lookup_asm_name)
+    else:
+        m["ASM Name"] = "-"
+
     # Final shape — match the new-format CSV exactly
     detailed = pd.DataFrame({
         "Store Code"                : m["Store Code"]                if "Store Code" in m.columns else "",
         "Store Name"                : m["Store Name"]                if "Store Name" in m.columns else "",
         "Store Director Name"       : m["Store Director Name"],
+        "ASM Name"                  : m["ASM Name"],
         "Last Day Non Member Shopped": m["Last Day Non Member Shopped"].astype(int),
         "Last Day member Enrollment": m["Last Day Member Enrollment"].astype(int),
         "Last Day Enrollment %"     : m["Last Day Enrollment %"],
@@ -2164,6 +2516,41 @@ def render_sidebar(df: pd.DataFrame, metrics_df: pd.DataFrame, dd_df: pd.DataFra
                 use_container_width=True)
         except Exception as e:
             st.sidebar.caption(f"Excel: {e}")
+
+    # ── 24×7 Keep-Alive panel ──────────────────────────────────────────────
+    st.sidebar.markdown("---")
+    with st.sidebar.expander("🟢 Keep-Alive (24×7×365)", expanded=False):
+        status = _KEEPALIVE_STATUS
+        st.markdown(
+            "This dashboard is configured to **never sleep**. Three layers "
+            "keep it warm: an internal background ping, a browser heartbeat, "
+            "and a public `?keepalive=1` URL you can give to a free external "
+            "uptime monitor."
+        )
+
+        st.markdown("**Status**")
+        st.caption(
+            f"• Thread alive: **{status.get('thread_alive', False)}**  \n"
+            f"• Started: **{status.get('started_at', '—')}**  \n"
+            f"• Pings sent: **{status.get('ping_count', 0)}** "
+            f"(errors: {status.get('errors', 0)})  \n"
+            f"• Last ping: **{status.get('last_ping', '—')}**  \n"
+            f"• Last status: **{status.get('last_status', '—')}**"
+        )
+
+        st.markdown("**External Uptime Monitor URL**")
+        st.caption(
+            "Paste this URL into a free service like **UptimeRobot** "
+            "([uptimerobot.com](https://uptimerobot.com)) or "
+            "**cron-job.org** with a 5-minute interval. This is the only way "
+            "to keep the app awake when *nobody* has the page open."
+        )
+        st.code(status.get("url") or "—", language="text")
+        st.caption(
+            "ℹ️ If the URL above shows `127.0.0.1`, set "
+            "`KEEPALIVE_URL` in **Settings → Secrets** on Streamlit Cloud to "
+            "your public app URL (e.g. `https://your-app.streamlit.app/`)."
+        )
 
     return {
         "multi"           : multi_filters,
